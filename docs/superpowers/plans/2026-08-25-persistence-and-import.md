@@ -2869,6 +2869,39 @@ git commit -m "docs: add iOS Shortcut setup and record the deployed-fetch result
 - Enrichment failure produces a stored recipe with `enrichment_applied = false`, not a failed import.
 - The deployed-fetch answer for Bon Appétit is recorded.
 
+## Findings during execution
+
+- **libsql `:memory:` cannot test transactional code.** `transaction()` hands its
+  open connection to the transaction and sets the client's handle to null, so
+  the next statement lazily opens a **new** connection. Against a file both see
+  the same database; against `:memory:` the new connection is a brand-new empty
+  one. Measured: 15 tables after migrate, 15 inside the transaction, **0 after
+  it** — every assertion failed with `no such table: recipes` *after*
+  `upsertRecipe` returned successfully. `tests/helpers/db.ts` therefore uses a
+  throwaway temp file per test, cleaned up on exit. **Do not "simplify" it back
+  to `:memory:`** — doing so silently disables every transactional test.
+  Shared-cache is not an escape: `@libsql/core` rejects `mode=memory`, and the
+  permitted `cache=shared` form is process-wide and would destroy per-test
+  isolation.
+
+- **A concurrent import of the same new URL surfaces `SQLITE_BUSY` locally, not
+  a UNIQUE violation** — the loser never acquires the write lock. Turso over
+  HTTP will likely surface `UNIQUE constraint failed: recipes.source_url`
+  instead. Any code that wants to report "duplicate" distinctly must handle
+  **both**, and should be verified against real Turso rather than the local
+  driver.
+
+- **The `DUMMY_HASH` timing guard copied from `gridiron-picks` was inert.** Its
+  payload was 54 characters where bcrypt requires 53, so `compare()` returned in
+  ~0.0ms instead of ~271ms — a single login request revealed whether an email
+  was registered. Replaced with a real 12-round hash and verified by
+  measurement. The same defect exists in the source project.
+
+- **Login was case-sensitive on email.** The seed script lowercases on write;
+  `authorize` looked up the raw input, and SQLite's default collation is
+  BINARY. `Foo@Example.com` would not have matched a stored `foo@example.com`.
+  Both sides now normalize.
+
 ## Decisions made during execution
 
 Findings raised by implementers and deliberately declined, recorded so they are
