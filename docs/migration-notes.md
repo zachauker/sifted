@@ -97,6 +97,33 @@ are the files behind them. If `npm run migrate:verify` isn't wired up yet,
 run `npx tsx --env-file-if-exists=.env.local scripts/migration-verify.ts`
 directly.
 
+## Who owns a tag, and why repair is safe
+
+`recipe_tags` carries a `source` column: `extracted`, `notion`, or `user`.
+
+This exists because re-importing a recipe replaces everything extraction can
+regenerate — and tags you curated in Notion over seven years are not among
+them. Before the column existed, the repair step below deleted them: a recipe
+with `course:bread, cuisine:italian, ingredient:chicken` came back with none,
+silently, while rating and status survived.
+
+Now `upsertRecipe` only ever deletes tags it wrote itself (`extracted`).
+Notion-supplied and user-supplied tags survive any number of re-imports.
+Ownership only climbs — `extracted` → `notion` → `user` — so when extraction
+and Notion both produce the same tag, the row is promoted to Notion-owned
+rather than left deletable.
+
+**One ordering constraint.** Migration `0002` backfills every pre-existing tag
+as `extracted`, because there is no way to tell retroactively who wrote them.
+That is correct for a database where only extraction has run. If you ever
+migrate from Notion *before* applying `0002`, re-run the migration afterward —
+it is idempotent, and it will re-stamp its own tags as `notion`.
+
+**If you later build tag editing in the UI, pass `source: 'user'` explicitly.**
+The column defaults to `extracted`, which means deletable by the next
+re-import. That default is right for the extraction path and wrong for a human
+one.
+
 ## Cleaning up afterward
 
 Once the migration has run and `npm run migrate:verify` shows a clean report:
