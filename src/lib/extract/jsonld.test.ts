@@ -47,6 +47,14 @@ describe('fromJsonLd', () => {
     })
   })
 
+  it('parses dozen-based yields as 12x, keeping bare-digit and range parsing intact', () => {
+    expect(fromJsonLd({ ...base, recipeYield: '1 dozen' }).servings).toBe(12)
+    expect(fromJsonLd({ ...base, recipeYield: '2 dozen cookies' }).servings).toBe(24)
+    expect(fromJsonLd({ ...base, recipeYield: 'a dozen rolls' }).servings).toBe(12)
+    expect(fromJsonLd({ ...base, recipeYield: '24 cookies' }).servings).toBe(24)
+    expect(fromJsonLd({ ...base, recipeYield: 'Serves 4 to 6' }).servings).toBe(4)
+  })
+
   it('maps HowToStep instructions to steps', () => {
     const r = fromJsonLd(base)
     expect(r.steps.map((s) => s.text)).toEqual([

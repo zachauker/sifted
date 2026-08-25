@@ -55,8 +55,23 @@ function toStringList(value: unknown): string[] {
   return []
 }
 
+/**
+ * "Dozen" yields are common on baking blogs (cookies, rolls, cinnamon buns)
+ * and must be checked before the bare-digit fallback below — otherwise
+ * "1 dozen" would read as 1 serving instead of 12, and "a dozen" (no leading
+ * digit) would read as 0/null instead of 12.
+ */
+const DOZEN = /(\d+)?\s*dozen/i
+
 function parseServings(yieldValue: unknown): number | null {
   const text = Array.isArray(yieldValue) ? String(yieldValue[0] ?? '') : String(yieldValue ?? '')
+
+  const dozenMatch = DOZEN.exec(text)
+  if (dozenMatch) {
+    const dozens = dozenMatch[1] ? Number(dozenMatch[1]) : 1
+    return Number.isFinite(dozens) && dozens > 0 ? dozens * 12 : null
+  }
+
   const match = /\d+/.exec(text)
   if (!match) return null
   const n = Number(match[0])
@@ -72,6 +87,14 @@ function collectSteps(value: unknown, section: string | null, out: ExtractedStep
     // newline/double-space boundaries this split relies on. Each resulting
     // segment is then run through plainText individually to strip markup
     // and decode entities.
+    //
+    // Deliberately does NOT split on a single space after a period. Cooking
+    // prose is full of period-then-single-space abbreviations ("1 tsp. salt",
+    // "approx. 5 minutes", "e.g."), and splitting on those would sever a step
+    // mid-sentence — corrupt data that *reads* as correct, which is worse
+    // than the alternative failure mode here (a single oversized step for a
+    // blob that only used single-space sentence separators). Only newlines
+    // and double-plus spaces are treated as reliable step boundaries.
     for (const line of value.split(/\n+|(?<=\.)\s{2,}/)) {
       const text = plainText(line)
       if (text) out.push({ position: out.length, section, text })
@@ -118,6 +141,13 @@ function collectIngredients(value: unknown): ExtractedIngredient[] {
  * Maps a schema.org Recipe node onto our contract. Ingredient lines are stored
  * verbatim; structured quantity/unit/item fields are filled in later by the
  * enrichment pass, never here.
+ *
+ * Security note: `ingredients[].rawText` and `steps[].text` are untrusted
+ * third-party strings taken verbatim from arbitrary food-blog markup. HTML
+ * tags are stripped and entities are decoded for readability, but the
+ * resulting text is not sanitized against being interpreted as markup —
+ * callers must render it as plain text (e.g. React's default text nodes),
+ * never via `dangerouslySetInnerHTML` or equivalent.
  */
 export function fromJsonLd(node: JsonLdNode): PartialRecipe {
   const steps: ExtractedStep[] = []
