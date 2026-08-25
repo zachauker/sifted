@@ -31,4 +31,20 @@ describe('parseIsoDurationMinutes', () => {
     expect(parseIsoDurationMinutes('')).toBeNull()
     expect(parseIsoDurationMinutes(undefined)).toBeNull()
   })
+
+  it('returns null above the reasonable ceiling', () => {
+    expect(parseIsoDurationMinutes('PT99999H')).toBeNull()
+  })
+
+  it('accepts exactly 30 days at the boundary', () => {
+    expect(parseIsoDurationMinutes('PT720H')).toBe(43200)
+  })
+
+  it('returns null just past the 30 day boundary', () => {
+    expect(parseIsoDurationMinutes('PT721H')).toBeNull()
+  })
+
+  it('accepts a real 18-hour overnight recipe (no-knead focaccia)', () => {
+    expect(parseIsoDurationMinutes('PT18H')).toBe(1080)
+  })
 })
