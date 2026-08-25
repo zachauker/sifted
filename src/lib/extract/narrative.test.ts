@@ -254,3 +254,50 @@ describe('extractNarrative: de-duplication against the extracted recipe', () => 
     expect(html).toContain('Salt is the whole trick here')
   })
 })
+
+/**
+ * Readability rewrites relative `href`/`src` attributes against the JSDOM base
+ * URL. Without a real `sourceUrl`, that base defaults to a placeholder and every
+ * relative link or image in the narrative resolves to a domain that does not
+ * exist -- broken links and broken images shown to the reader inside the
+ * collapsed story.
+ */
+describe('extractNarrative: resolves relative URLs against the real page URL', () => {
+  const pageWithRelativeLinks = `
+    <html><head><title>Flatbread</title></head><body>
+      <article>
+        <h1>Homemade Flatbread</h1>
+        <p>Flatbread is some serious comfort food for this Macedonian girl. Carbs, carbs, carbs!
+           They make everything better, right? Your go-to carb might be a big crusty loaf of French
+           bread, but for me, flatbread is where it is at, every single time I get the chance.
+           Read our <a href="/privacy/">privacy policy</a> for more.</p>
+        <img src="/img/x.jpg" alt="flatbread">
+        <p>I love to make my own flatbread because it is quick and easy, and it is easier than most
+           breads because you do not need to let it rise for very long at all before cooking.</p>
+      </article>
+    </body></html>
+  `
+
+  it('resolves a relative href against the given source URL', () => {
+    const html = extractNarrative(
+      pageWithRelativeLinks,
+      undefined,
+      'https://www.realsite.com/recipes/flatbread',
+    )
+    expect(html).toContain('href="https://www.realsite.com/privacy/"')
+  })
+
+  it('resolves a relative img src against the given source URL', () => {
+    const html = extractNarrative(
+      pageWithRelativeLinks,
+      undefined,
+      'https://www.realsite.com/recipes/flatbread',
+    )
+    expect(html).toContain('src="https://www.realsite.com/img/x.jpg"')
+  })
+
+  it('falls back to the placeholder base when no source URL is given', () => {
+    const html = extractNarrative(pageWithRelativeLinks)
+    expect(html).toContain('href="https://example.com/privacy/"')
+  })
+})

@@ -150,10 +150,14 @@ export async function extract({ url, html, llm }: ExtractInput): Promise<Extract
     // steps and ingredients we already have. Without it the "story" ends up
     // being the recipe a second time, which is the exact thing this app exists
     // to stop doing.
-    narrativeHtml: extractNarrative(html, {
-      steps: enriched.steps.map((step) => step.text),
-      ingredients: enriched.ingredients.map((ingredient) => ingredient.rawText),
-    }),
+    narrativeHtml: extractNarrative(
+      html,
+      {
+        steps: enriched.steps.map((step) => step.text),
+        ingredients: enriched.ingredients.map((ingredient) => ingredient.rawText),
+      },
+      url,
+    ),
   }
 }
 

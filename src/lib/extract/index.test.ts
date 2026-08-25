@@ -304,3 +304,55 @@ describe('extract: stub structured data does not short-circuit the chain', () =>
   })
 })
 
+/**
+ * The narrative fix has two independent halves: the publisher/plugin selector
+ * list in narrative.ts, and de-duplication against the already-extracted recipe
+ * body. Each half masks the other in the existing fixture tests -- the selectors
+ * catch every real fixture's markup, so nothing pins that `extract()` actually
+ * passes the recipe body through to `extractNarrative`. This page uses no known
+ * recipe-card selector (a plain, unclassed `<div>`) so only the body-dedupe path
+ * can strip the duplicated step -- if `extract()` ever stops passing the recipe
+ * body, this test (and only this test) catches it.
+ */
+describe('extract: wires the recipe body into narrative de-duplication', () => {
+  const STEP_TEXT =
+    'Whisk the eggs with the sugar until the mixture is pale and roughly doubled in volume.'
+
+  const html = `<html><head><script type="application/ld+json">
+    {"@type":"Recipe","name":"Egg Korma","recipeIngredient":["2 eggs"],
+     "recipeInstructions":[{"@type":"HowToStep","text":"${STEP_TEXT}"}]}
+  </script></head><body>
+    <article>
+      <p>${'This dish has been in my family for generations, passed down through countless '.repeat(4)}Sunday mornings.</p>
+      <div>${STEP_TEXT}</div>
+    </article>
+  </body></html>`
+
+  it('strips prose that duplicates the extracted recipe body even with no recognized card selector', async () => {
+    const result = await extract({ url: 'https://example.com/korma', html, llm: noopLlm })
+
+    expect(result.steps[0].text).toBe(STEP_TEXT)
+    expect(result.narrativeHtml).not.toBeNull()
+    expect(result.narrativeHtml).not.toContain(STEP_TEXT)
+  })
+})
+
+/**
+ * `sumTimes` in jsonld.ts falls back to prepTime + cookTime only when
+ * totalTime is absent. Exercised through `extract()` rather than by importing
+ * `fromJsonLd`/`sumTimes` directly, since jsonld.ts is owned by another agent
+ * concurrently.
+ */
+describe('extract: claimedTimeMinutes falls back to prepTime + cookTime', () => {
+  it('sums prepTime and cookTime when totalTime is absent', async () => {
+    const html = `<html><head><script type="application/ld+json">
+      {"@type":"Recipe","name":"Egg Korma","recipeIngredient":["2 eggs"],
+       "recipeInstructions":[{"@type":"HowToStep","text":"Boil the eggs."}],
+       "prepTime":"PT15M","cookTime":"PT35M"}
+    </script></head><body><p>hi</p></body></html>`
+
+    const result = await extract({ url: 'https://example.com/korma', html, llm: noopLlm })
+    expect(result.claimedTimeMinutes).toBe(50)
+  })
+})
+

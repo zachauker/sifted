@@ -199,9 +199,20 @@ function removeEmptyContainers(root: Element): void {
  *
  * `recipeBody` is optional: without it only the selector-based removals run, so
  * `extractNarrative(html)` remains usable standalone.
+ *
+ * `sourceUrl` is the page's real URL, used as the JSDOM base so Readability
+ * resolves relative `href`/`src` attributes against the site the page actually
+ * came from rather than a placeholder. It defaults to the old placeholder so
+ * direct callers (tests, standalone use) keep working unchanged, but `extract()`
+ * must always pass the real URL -- otherwise every relative link and image in
+ * the narrative resolves to a domain that does not exist.
  */
-export function extractNarrative(html: string, recipeBody?: RecipeBodyText): string | null {
-  const dom = new JSDOM(html, { url: 'https://example.com/' })
+export function extractNarrative(
+  html: string,
+  recipeBody?: RecipeBodyText,
+  sourceUrl = 'https://example.com/',
+): string | null {
+  const dom = new JSDOM(html, { url: sourceUrl })
   const { document } = dom.window
 
   // Measured once, before any removals, so removing one card doesn't shift the

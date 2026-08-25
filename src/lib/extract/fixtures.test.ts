@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { gunzipSync } from 'node:zlib'
 import { fileURLToPath } from 'node:url'
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeAll } from 'vitest'
 import { extract } from './index'
 import type { LlmClient } from './llm-types'
 import type { ExtractedRecipe } from './types'
@@ -14,14 +14,25 @@ import type { ExtractedRecipe } from './types'
  * Bon Appétit's -- run over a megabyte raw. Each is decompressed on the fly with
  * `zlib.gunzipSync`; nothing here touches the network or an LLM.
  *
- * Fixtures are generated locally and may not exist on every machine (there is no
- * live-fetch step in CI). Each test is guarded with `it.runIf(existsSync(...))`
- * so the suite still passes -- by skipping -- when a given fixture is absent.
+ * The fixtures are committed to the repo, so a missing one is never an
+ * environment difference worth silently skipping over -- it means a filename
+ * typo, a `.gitattributes` mishap, or a sparse checkout quietly deleted this
+ * entire real-page regression suite while the build stayed green. `beforeAll`
+ * below asserts every expected fixture is present and fails loudly, by name,
+ * if one is not, instead of the suite skipping tests one by one.
  *
  * `__dirname` is unavailable under Vitest's ESM transform, hence the
  * `fileURLToPath(new URL(...))` resolution.
  */
 const FIXTURES_DIR = fileURLToPath(new URL('./fixtures/', import.meta.url))
+
+const FIXTURE_NAMES = [
+  'bonappetit-bolognese',
+  'bonappetit-gochujang-chicken',
+  'bonappetit-cabbage-gratin',
+  'easyweeknightrecipes-flatbread',
+  'cafedelites-tuscan-shrimp',
+]
 
 const noopLlm: LlmClient = {
   enrich: vi.fn().mockResolvedValue(null),
@@ -36,15 +47,30 @@ function loadFixture(name: string): string {
   return gunzipSync(readFileSync(fixturePath(name))).toString('utf-8')
 }
 
+beforeAll(() => {
+  const missing = FIXTURE_NAMES.filter((name) => !existsSync(fixturePath(name)))
+  if (missing.length > 0) {
+    throw new Error(
+      `Missing fixture file(s), regenerate with \`npm run extract -- <url> <path> --no-llm\`: ` +
+        missing.map(fixturePath).join(', '),
+    )
+  }
+})
+
 /**
  * The product promise is "recipe at the top, story collapsed at the bottom", so
  * the narrative must contain neither the steps nor the ingredient lines that were
  * already extracted into structured fields. Asserted against the recipe's own
  * output rather than hand-copied strings, so it keeps holding if a fixture is
  * refreshed.
+ *
+ * Also pins that the narrative was built against the real page URL rather than
+ * the placeholder JSDOM base: a relative href/src resolving to `example.com`
+ * would mean broken links and broken images shown inside the collapsed story.
  */
 function expectNoRecipeDuplication(result: ExtractedRecipe): void {
   expect(result.narrativeHtml).not.toBeNull()
+  expect(result.narrativeHtml).not.toContain('example.com')
   for (const step of result.steps) {
     expect(result.narrativeHtml).not.toContain(step.text)
   }
@@ -57,7 +83,7 @@ describe('fixtures: bonappetit.com/recipe/bas-best-bolognese', () => {
   const name = 'bonappetit-bolognese'
   const url = 'https://www.bonappetit.com/recipe/bas-best-bolognese'
 
-  it.runIf(existsSync(fixturePath(name)))('extracts the full recipe from JSON-LD', async () => {
+  it('extracts the full recipe from JSON-LD', async () => {
     const result = await extract({ url, html: loadFixture(name), llm: noopLlm })
 
     expect(result.extractionMethod).toBe('jsonld')
@@ -92,7 +118,7 @@ describe('fixtures: bonappetit.com/recipe/slow-roast-gochujang-chicken', () => {
   const name = 'bonappetit-gochujang-chicken'
   const url = 'https://www.bonappetit.com/recipe/slow-roast-gochujang-chicken'
 
-  it.runIf(existsSync(fixturePath(name)))('extracts the full recipe from JSON-LD', async () => {
+  it('extracts the full recipe from JSON-LD', async () => {
     const result = await extract({ url, html: loadFixture(name), llm: noopLlm })
 
     expect(result.extractionMethod).toBe('jsonld')
@@ -119,7 +145,7 @@ describe('fixtures: bonappetit.com/recipe/cheesy-cabbage-gratin', () => {
   const name = 'bonappetit-cabbage-gratin'
   const url = 'https://www.bonappetit.com/recipe/cheesy-cabbage-gratin'
 
-  it.runIf(existsSync(fixturePath(name)))('extracts the full recipe from JSON-LD', async () => {
+  it('extracts the full recipe from JSON-LD', async () => {
     const result = await extract({ url, html: loadFixture(name), llm: noopLlm })
 
     expect(result.extractionMethod).toBe('jsonld')
@@ -150,7 +176,7 @@ describe('fixtures: easyweeknightrecipes.com/homemade-flatbread-recipe', () => {
   const name = 'easyweeknightrecipes-flatbread'
   const url = 'https://www.easyweeknightrecipes.com/homemade-flatbread-recipe/'
 
-  it.runIf(existsSync(fixturePath(name)))('extracts the full recipe from JSON-LD', async () => {
+  it('extracts the full recipe from JSON-LD', async () => {
     const result = await extract({ url, html: loadFixture(name), llm: noopLlm })
 
     expect(result.extractionMethod).toBe('jsonld')
@@ -179,7 +205,7 @@ describe('fixtures: cafedelites.com/creamy-garlic-butter-tuscan-shrimp', () => {
   const name = 'cafedelites-tuscan-shrimp'
   const url = 'https://cafedelites.com/creamy-garlic-butter-tuscan-shrimp/'
 
-  it.runIf(existsSync(fixturePath(name)))('extracts the full recipe from JSON-LD', async () => {
+  it('extracts the full recipe from JSON-LD', async () => {
     const result = await extract({ url, html: loadFixture(name), llm: noopLlm })
 
     expect(result.extractionMethod).toBe('jsonld')
