@@ -138,6 +138,20 @@ export const images = sqliteTable('images', {
   role: text('role', { enum: ['source_hero', 'user'] }).notNull(),
   blobKey: text('blob_key').notNull(),
   thumbKey: text('thumb_key').notNull(),
+  // The provider's own public URL for each blob, taken verbatim from what
+  // `BlobStore.put` returned at ingest time — never reconstructed from the
+  // key. A Vercel Blob URL is `https://<storeId>.public.blob.vercel-storage.com/<key>`,
+  // and the store id is not derivable from the key alone, so the key by
+  // itself cannot be turned back into a fetchable URL later. Storing the
+  // provider's own answer here (rather than baking a URL-building rule into
+  // every reader) is what keeps `lib/storage` swappable for a future
+  // provider, such as Cloudflare R2, without a data migration.
+  //
+  // Nullable: a database migrated before this column existed has rows with
+  // keys but no stored URL, and there is no way to recover one after the
+  // fact.
+  blobUrl: text('blob_url'),
+  thumbUrl: text('thumb_url'),
   width: integer('width').notNull(),
   height: integer('height').notNull(),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),

@@ -148,6 +148,8 @@ const PASTED_HTML = pastedHtml()
 const INGESTED: IngestedImage = {
   blobKey: 'recipes/x/hero.webp',
   thumbKey: 'recipes/x/hero-thumb.webp',
+  blobUrl: 'memory://recipes/x/hero.webp',
+  thumbUrl: 'memory://recipes/x/hero-thumb.webp',
   width: 1200,
   height: 800,
 }

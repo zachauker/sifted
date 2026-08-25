@@ -389,6 +389,8 @@ export async function runImport(input: RunImportInput): Promise<void> {
           role: 'source_hero',
           blobKey: image.blobKey,
           thumbKey: image.thumbKey,
+          blobUrl: image.blobUrl,
+          thumbUrl: image.thumbUrl,
           width: image.width,
           height: image.height,
         })

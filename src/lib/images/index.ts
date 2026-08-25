@@ -19,6 +19,22 @@ const SVG_SNIFF_BYTES = 512
 export type IngestedImage = {
   blobKey: string
   thumbKey: string
+  /**
+   * The public URL of the full-size display image (up to 1600px wide), taken
+   * verbatim from what `store.put` returned — never reconstructed from
+   * `blobKey`. A Vercel Blob URL is
+   * `https://<storeId>.public.blob.vercel-storage.com/<key>`, and the store
+   * id is not derivable from the key, so the store's own answer is the only
+   * source of truth. This is the full image: a grid thumbnail must use
+   * `thumbUrl` instead, or every card in a 156-recipe grid pulls a 1600px
+   * image.
+   */
+  blobUrl: string
+  /**
+   * The public URL of the 480px grid thumbnail, taken verbatim from what
+   * `store.put` returned. This is the one a photo grid should render.
+   */
+  thumbUrl: string
   width: number
   height: number
 }
@@ -149,10 +165,17 @@ export async function ingestHeroImage(input: IngestInput): Promise<IngestedImage
     const blobKey = `recipes/${recipeId}/hero.webp`
     const thumbKey = `recipes/${recipeId}/hero-thumb.webp`
 
-    await store.put(blobKey, new Uint8Array(full), 'image/webp')
-    await store.put(thumbKey, new Uint8Array(thumb), 'image/webp')
+    const blobResult = await store.put(blobKey, new Uint8Array(full), 'image/webp')
+    const thumbResult = await store.put(thumbKey, new Uint8Array(thumb), 'image/webp')
 
-    return { blobKey, thumbKey, width, height }
+    return {
+      blobKey,
+      thumbKey,
+      blobUrl: blobResult.url,
+      thumbUrl: thumbResult.url,
+      width,
+      height,
+    }
   } catch {
     return null
   }

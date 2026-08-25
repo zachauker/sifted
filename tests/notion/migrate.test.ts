@@ -1210,6 +1210,8 @@ describe('processRow — the hero image is captured before anything throttled', 
           return {
             blobKey: `recipes/${recipeId}/hero.webp`,
             thumbKey: `recipes/${recipeId}/hero-thumb.webp`,
+            blobUrl: `memory://recipes/${recipeId}/hero.webp`,
+            thumbUrl: `memory://recipes/${recipeId}/hero-thumb.webp`,
             width: 800,
             height: 600,
           }
@@ -1245,6 +1247,8 @@ describe('processRow — the hero image is captured before anything throttled', 
           return {
             blobKey: `recipes/${recipeId}/hero.webp`,
             thumbKey: `recipes/${recipeId}/hero-thumb.webp`,
+            blobUrl: `memory://recipes/${recipeId}/hero.webp`,
+            thumbUrl: `memory://recipes/${recipeId}/hero-thumb.webp`,
             width: 800,
             height: 600,
           }
