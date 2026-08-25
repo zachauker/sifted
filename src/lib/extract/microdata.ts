@@ -1,6 +1,6 @@
 import { JSDOM } from 'jsdom'
 import { normalizeTags } from '@/lib/taxonomy'
-import { parseIsoDurationMinutes } from './duration'
+import { parseDurationMinutes } from './duration'
 import type { PartialRecipe } from './types'
 
 /**
@@ -167,7 +167,7 @@ export function fromMicrodata(html: string): PartialRecipe | null {
     description: one(scope, 'description'),
     author: one(scope, 'author'),
     publisher: one(scope, 'publisher'),
-    claimedTimeMinutes: parseIsoDurationMinutes(one(scope, 'totalTime')),
+    claimedTimeMinutes: parseDurationMinutes(one(scope, 'totalTime')),
     servings: servingsMatch ? Number(servingsMatch[0]) : null,
     yieldText,
     ingredients: all(scope, 'recipeIngredient').map((rawText, position) => ({

@@ -1,6 +1,6 @@
 import { JSDOM } from 'jsdom'
 import { normalizeTags } from '@/lib/taxonomy'
-import { parseIsoDurationMinutes } from './duration'
+import { parseDurationMinutes } from './duration'
 import type { JsonLdNode } from './jsonld-find'
 import type { ExtractedIngredient, ExtractedStep, PartialRecipe } from './types'
 
@@ -178,7 +178,7 @@ export function fromJsonLd(node: JsonLdNode): PartialRecipe {
     author: firstString(node.author),
     publisher: firstString(node.publisher),
     claimedTimeMinutes:
-      parseIsoDurationMinutes(node.totalTime as string | undefined) ??
+      parseDurationMinutes(node.totalTime as string | undefined) ??
       sumTimes(node.prepTime, node.cookTime),
     servings: parseServings(node.recipeYield),
     yieldText: firstString(node.recipeYield),
@@ -191,8 +191,8 @@ export function fromJsonLd(node: JsonLdNode): PartialRecipe {
 }
 
 function sumTimes(prep: unknown, cook: unknown): number | null {
-  const p = parseIsoDurationMinutes(prep as string | undefined)
-  const c = parseIsoDurationMinutes(cook as string | undefined)
+  const p = parseDurationMinutes(prep as string | undefined)
+  const c = parseDurationMinutes(cook as string | undefined)
   if (p === null && c === null) return null
   return (p ?? 0) + (c ?? 0)
 }

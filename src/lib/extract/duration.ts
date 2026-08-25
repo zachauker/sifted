@@ -113,7 +113,7 @@ function parseFreeformDurationMinutes(value: string): number | null {
  * absent, malformed, or zero durations so that "no data" and "zero minutes"
  * are never confused.
  */
-export function parseIsoDurationMinutes(value: string | undefined | null): number | null {
+export function parseDurationMinutes(value: string | undefined | null): number | null {
   if (!value) return null
 
   const match = ISO_DURATION.exec(value.trim())
