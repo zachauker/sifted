@@ -1,13 +1,11 @@
 import { NextResponse } from 'next/server'
 import { waitUntil } from '@vercel/functions'
 import { z } from 'zod'
-import { and, eq, inArray } from 'drizzle-orm'
 import { auth } from '@/lib/auth'
 import { db } from '@/lib/db'
-import { importJobs } from '@/lib/db/schema'
 import { normalizeSourceUrl } from '@/lib/url'
 import { findBySourceUrl } from '@/lib/db/queries/recipes'
-import { createJob, markDuplicate, markFailed } from '@/lib/db/queries/jobs'
+import { createJob, findInFlightJob, markDuplicate, markFailed } from '@/lib/db/queries/jobs'
 import { runImport } from '@/lib/import/run-import'
 import { createVercelBlobStore } from '@/lib/storage/vercel-blob'
 import type { BlobStore } from '@/lib/storage'
@@ -61,7 +59,6 @@ const bodySchema = z.object({ url: z.string() })
 // have caught; `failed` is not in-flight and pasting the same URL again
 // after a failure is exactly how the tray's own retry works, so a fresh
 // attempt here should proceed rather than being told to wait on a dead job.
-const IN_FLIGHT_STATUSES = ['queued', 'running'] as const
 
 export async function POST(request: Request) {
   const session = await auth()
@@ -102,17 +99,7 @@ export async function POST(request: Request) {
     )
   }
 
-  // A second paste of a URL that's already queued or running must not spin
-  // up a second concurrent import. Without this, two clicks (or two people)
-  // pointing this page at the same slow page fetch it twice, pay for the
-  // model twice, and race two `runImport` calls against the same row —
-  // `upsertRecipe`'s upsert-by-`sourceUrl` keeps that from corrupting
-  // anything, but it is still wasted work and a spurious extra job. Queried
-  // directly against `importJobs` rather than through a new export from
-  // `src/lib/db/queries/jobs.ts`, which this task does not own.
-  const inFlight = await db.select({ id: importJobs.id }).from(importJobs)
-    .where(and(eq(importJobs.url, canonical.url), inArray(importJobs.status, IN_FLIGHT_STATUSES)))
-    .get()
+  const inFlight = await findInFlightJob(db, canonical.url)
   if (inFlight) {
     return NextResponse.json(
       { status: 'already_importing', jobId: inFlight.id },

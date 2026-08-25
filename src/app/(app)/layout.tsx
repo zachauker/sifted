@@ -33,6 +33,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
             Library
           </Link>
           <Link href="/add">Add</Link>
+          <Link href="/settings">Settings</Link>
           <Link href="/needs-attention">
             Needs attention
             {failedCount > 0 && (

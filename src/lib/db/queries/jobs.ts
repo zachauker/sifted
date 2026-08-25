@@ -1,4 +1,4 @@
-import { desc, eq, inArray, sql } from 'drizzle-orm'
+import { and, desc, eq, inArray, sql } from 'drizzle-orm'
 import type { Db } from '@/lib/db'
 import { importJobs } from '@/lib/db/schema'
 
@@ -179,4 +179,26 @@ export async function listJobsNeedingAttention(db: Db, limit?: number) {
     .where(inArray(importJobs.status, ['failed', 'running', 'queued']))
     .orderBy(desc(importJobs.createdAt), sql`${importJobs}.rowid desc`)
   return limit === undefined ? base : base.limit(limit)
+}
+
+/** Statuses meaning "an import for this URL is already under way". */
+const IN_FLIGHT_STATUSES = ['queued', 'running'] as const
+
+/**
+ * Finds an import already under way for a canonical URL.
+ *
+ * Both capture paths dedupe against *existing recipes* before starting work,
+ * but that check cannot see an import that is still running — so sharing the
+ * same link twice in quick succession (a double tap on the share sheet, or
+ * both phones at once) fetches the page twice, pays for the model twice, and
+ * races two runImport calls at one row. `upsertRecipe` keys on `sourceUrl`, so
+ * nothing is corrupted, but the work and the spend are wasted and the tray
+ * gains a spurious job.
+ */
+export async function findInFlightJob(db: Db, url: string) {
+  return db
+    .select({ id: importJobs.id })
+    .from(importJobs)
+    .where(and(eq(importJobs.url, url), inArray(importJobs.status, [...IN_FLIGHT_STATUSES])))
+    .get()
 }
