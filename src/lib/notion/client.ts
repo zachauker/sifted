@@ -231,7 +231,24 @@ async function renderBlocks(
   return lines
 }
 
-function renderBlockOwnLines(block: BlockObjectResponse): string[] {
+/**
+ * Renders a block's own text -- as opposed to its children, which `renderBlocks`
+ * recurses into separately regardless of what happens here.
+ *
+ * Every case below is a block type that carries its own `rich_text` (or, for
+ * `table_row`, the closest equivalent: a grid of rich_text cells). The
+ * `default` case is the important one: rather than silently dropping a block
+ * type this function has no case for, it looks for a `rich_text` array on the
+ * block's payload and renders it the same way a paragraph would. New Notion
+ * block types appear over time (this SDK version alone added `heading_4` and
+ * `meeting_notes` since the union was first handled here); a block this
+ * function has never seen still gets its text recovered rather than dropped.
+ */
+// Exported for tests/notion/render.test.ts, which drives the real renderer
+// with constructed block objects -- no Client, no network -- rather than
+// against hand-captured markdown fixtures that could silently drift from
+// what the renderer actually produces.
+export function renderBlockOwnLines(block: BlockObjectResponse): string[] {
   switch (block.type) {
     case 'heading_1':
       return [`# ${richTextToMarkdown(block.heading_1.rich_text)}`]
@@ -239,23 +256,79 @@ function renderBlockOwnLines(block: BlockObjectResponse): string[] {
       return [`## ${richTextToMarkdown(block.heading_2.rich_text)}`]
     case 'heading_3':
       return [`### ${richTextToMarkdown(block.heading_3.rich_text)}`]
+    case 'heading_4':
+      return [`#### ${richTextToMarkdown(block.heading_4.rich_text)}`]
     case 'paragraph':
       return [richTextToMarkdown(block.paragraph.rich_text)]
     case 'bulleted_list_item':
       return [`- ${richTextToMarkdown(block.bulleted_list_item.rich_text)}`]
     case 'numbered_list_item':
       return [`1. ${richTextToMarkdown(block.numbered_list_item.rich_text)}`]
+    // A checkbox ingredient list is ordinary Notion authoring for a
+    // hand-typed recipe -- rendered as a bullet so it parses the same way a
+    // `bulleted_list_item` does downstream; checked/unchecked state carries
+    // no meaning for recipe recovery and is deliberately dropped.
+    case 'to_do':
+      return [`- ${richTextToMarkdown(block.to_do.rich_text)}`]
+    // A toggle's own text is its (always-visible) summary line; its
+    // children -- rendered separately by the caller -- are whatever was
+    // nested inside it.
+    case 'toggle':
+      return [richTextToMarkdown(block.toggle.rich_text)]
+    case 'callout':
+      return [richTextToMarkdown(block.callout.rich_text)]
     case 'quote':
       return [`> ${richTextToMarkdown(block.quote.rich_text)}`]
     case 'image':
       return [`![](${imageUrl(block.image)})`]
     case 'code':
       return renderCodeBlock(block)
+    // What Notion's own Web Clipper writes for a clipped source URL -- the
+    // one place `findSourceUrlInBody` looks for a URL a row's `Link`
+    // property doesn't have. Emitted as a bare-URL line first (so that
+    // search still matches it) with any caption on its own line after, so a
+    // caption never turns the URL line into something search would miss.
+    case 'bookmark':
+      return renderUrlBlock(block.bookmark)
+    case 'embed':
+      return renderUrlBlock(block.embed)
+    case 'link_preview':
+      return renderUrlBlock(block.link_preview)
+    // Rows arrive as children of the `table` block (which itself carries no
+    // rich_text and falls through to the generic default below, correctly
+    // emitting nothing on its own). Each row is rendered as one bullet line
+    // with cells joined by " | " rather than as `| a | b |` markdown table
+    // syntax: `body.ts` has no table-syntax parser, and a bullet line is
+    // exactly what its existing list-item handling (`stripListMarker`,
+    // ingredient/step parsing) already knows how to consume without any new
+    // parsing logic added on that side.
+    case 'table_row':
+      return [`- ${block.table_row.cells.map((cell) => richTextToMarkdown(cell)).join(' | ')}`]
     default:
-      // Unknown block type -- ignored rather than throwing. Its children,
-      // if any, are still recursed into by the caller.
-      return []
+      return renderGenericRichText(block)
   }
+}
+
+/**
+ * The fallback for any block type not given an explicit case above --
+ * including ones that don't exist yet. If the block's own payload has a
+ * `rich_text` array, it's rendered exactly as a paragraph would be; if not
+ * (a `divider`, a `table`, a `column_list`), nothing is emitted, matching the
+ * old default's behavior. Either way nothing throws, and text is never
+ * dropped silently.
+ */
+function renderGenericRichText(block: BlockObjectResponse): string[] {
+  const payload = asRecord((block as unknown as Record<string, unknown>)[block.type])
+  const richText = payload?.rich_text
+  if (!Array.isArray(richText) || richText.length === 0) return []
+  return [richTextToMarkdown(richText as RichTextItemResponse[])]
+}
+
+function renderUrlBlock(content: { url: string; caption?: RichTextItemResponse[] }): string[] {
+  const lines = [content.url]
+  const caption = content.caption ? richTextToMarkdown(content.caption) : ''
+  if (caption) lines.push(caption)
+  return lines
 }
 
 function imageUrl(image: ImageBlockObjectResponse['image']): string {
@@ -271,7 +344,39 @@ function renderCodeBlock(block: CodeBlockObjectResponse): string[] {
 }
 
 function richTextToMarkdown(richText: RichTextItemResponse[]): string {
-  return richText.map(renderRichTextItem).join('')
+  return mergeAdjacentRichText(richText).map(renderRichTextItem).join('')
+}
+
+/**
+ * Notion splits `rich_text` at every annotation and edit boundary, so two
+ * adjacent runs that share the same formatting ("Dou" then "gh", both bold)
+ * are legitimately two array items for one visual word. Rendered
+ * independently that produces `**Dou****gh**`; merged first, it produces the
+ * single run `**Dough**` that `BOLD_ONLY_RE` in body.ts expects a bolded
+ * section-break line to be.
+ */
+function mergeAdjacentRichText(richText: RichTextItemResponse[]): RichTextItemResponse[] {
+  const merged: RichTextItemResponse[] = []
+  for (const item of richText) {
+    const prev = merged.at(-1)
+    if (prev && prev.type === item.type && sameFormatting(prev, item)) {
+      merged[merged.length - 1] = { ...prev, plain_text: prev.plain_text + item.plain_text }
+    } else {
+      merged.push(item)
+    }
+  }
+  return merged
+}
+
+/** Only the annotations `renderRichTextItem` actually turns into markdown syntax matter here. */
+function sameFormatting(a: RichTextItemResponse, b: RichTextItemResponse): boolean {
+  return (
+    a.href === b.href &&
+    a.annotations.bold === b.annotations.bold &&
+    a.annotations.italic === b.annotations.italic &&
+    a.annotations.strikethrough === b.annotations.strikethrough &&
+    a.annotations.code === b.annotations.code
+  )
 }
 
 function renderRichTextItem(item: RichTextItemResponse): string {

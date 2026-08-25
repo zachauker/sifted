@@ -21,7 +21,7 @@ const HEADING_RE = /^(#{1,6})\s+(.+?)\s*$/
 const IMAGE_ONLY_RE = /^!\[[^\]]*\]\(\s*([^)\s]+)[^)]*\)$/
 const LINK_ONLY_RE = /^\[[^\]]*\]\(\s*([^)\s]+)[^)]*\)$/
 const BARE_URL_RE = /^(https?:\/\/\S+)$/
-const LIST_MARKER_RE = /^(?:[-*+]|\d+[.)])\s+/
+const LIST_MARKER_RE = /^(?:[-*+>]|\d+[.)])\s+/
 const BOLD_ONLY_RE = /^(?:\*\*(.+?)\*\*|__(.+?)__)$/
 
 /**
@@ -48,7 +48,12 @@ function asHeading(line: string): Heading | null {
   return match ? { level: match[1].length, text: match[2] } : null
 }
 
-/** Strips a leading `- `, `* ` or `1. ` so the stored text is the content only. */
+/**
+ * Strips a leading `- `, `* `, `1. ` or `> ` so the stored text is the
+ * content only. The `>` case matters because `renderBlockOwnLines` renders a
+ * Notion `quote` block as `> text` -- without it here, the marker survived
+ * verbatim into `ingredients.raw_text`.
+ */
 function stripListMarker(line: string): string {
   return line.replace(LIST_MARKER_RE, '').trim()
 }
