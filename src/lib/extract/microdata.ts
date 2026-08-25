@@ -1,6 +1,6 @@
 import { JSDOM } from 'jsdom'
 import { normalizeTags } from '@/lib/taxonomy'
-import { parseDurationMinutes } from './duration'
+import { parseServingsText, resolveClaimedTimeMinutes, splitCommaSeparated } from './schema-fields'
 import type { PartialRecipe } from './types'
 
 /**
@@ -74,6 +74,18 @@ function all(scope: Element, prop: string): string[] {
 
 function one(scope: Element, prop: string): string | null {
   return all(scope, prop)[0] ?? null
+}
+
+/**
+ * Like `all`, but for tag-bearing properties (recipeCategory, recipeCuisine,
+ * keywords) whose value is commonly a single comma-separated string rather
+ * than one element per value — e.g. a single
+ * `<meta itemprop="keywords" content="italian, pasta, one pot">`. Splitting
+ * here (shared with jsonld.ts via schema-fields.ts) is what keeps this path
+ * from handing back zero tags for the majority of real recipe markup.
+ */
+function allTagValues(scope: Element, prop: string): string[] {
+  return all(scope, prop).flatMap(splitCommaSeparated)
 }
 
 const BLOCK_SELECTOR = 'p, li, div'
@@ -160,15 +172,18 @@ export function fromMicrodata(html: string): PartialRecipe | null {
   if (!title) return null
 
   const yieldText = one(scope, 'recipeYield')
-  const servingsMatch = yieldText ? /\d+/.exec(yieldText) : null
 
   return {
     title,
     description: one(scope, 'description'),
     author: one(scope, 'author'),
     publisher: one(scope, 'publisher'),
-    claimedTimeMinutes: parseDurationMinutes(one(scope, 'totalTime')),
-    servings: servingsMatch ? Number(servingsMatch[0]) : null,
+    claimedTimeMinutes: resolveClaimedTimeMinutes(
+      one(scope, 'totalTime'),
+      one(scope, 'prepTime'),
+      one(scope, 'cookTime')
+    ),
+    servings: yieldText ? parseServingsText(yieldText) : null,
     yieldText,
     ingredients: all(scope, 'recipeIngredient').map((rawText, position) => ({
       position,
@@ -185,9 +200,9 @@ export function fromMicrodata(html: string): PartialRecipe | null {
       text,
     })),
     tags: normalizeTags([
-      ...all(scope, 'recipeCategory'),
-      ...all(scope, 'recipeCuisine'),
-      ...all(scope, 'keywords'),
+      ...allTagValues(scope, 'recipeCategory'),
+      ...allTagValues(scope, 'recipeCuisine'),
+      ...allTagValues(scope, 'keywords'),
     ]),
     heroImageUrl: one(scope, 'image'),
     extractionMethod: 'microdata',

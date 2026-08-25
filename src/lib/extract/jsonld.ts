@@ -1,6 +1,6 @@
 import { JSDOM } from 'jsdom'
 import { normalizeTags } from '@/lib/taxonomy'
-import { parseDurationMinutes } from './duration'
+import { parseServingsText, resolveClaimedTimeMinutes, splitCommaSeparated } from './schema-fields'
 import type { JsonLdNode } from './jsonld-find'
 import type { ExtractedIngredient, ExtractedStep, PartialRecipe } from './types'
 
@@ -58,7 +58,7 @@ function firstUrl(value: unknown): string | null {
 
 function toStringList(value: unknown): string[] {
   if (typeof value === 'string') {
-    return value.split(',').map((s) => s.trim()).filter(Boolean)
+    return splitCommaSeparated(value)
   }
   if (Array.isArray(value)) return value.flatMap(toStringList)
   if (value && typeof value === 'object') {
@@ -68,27 +68,9 @@ function toStringList(value: unknown): string[] {
   return []
 }
 
-/**
- * "Dozen" yields are common on baking blogs (cookies, rolls, cinnamon buns)
- * and must be checked before the bare-digit fallback below — otherwise
- * "1 dozen" would read as 1 serving instead of 12, and "a dozen" (no leading
- * digit) would read as 0/null instead of 12.
- */
-const DOZEN = /(\d+)?\s*dozen/i
-
 function parseServings(yieldValue: unknown): number | null {
   const text = Array.isArray(yieldValue) ? String(yieldValue[0] ?? '') : String(yieldValue ?? '')
-
-  const dozenMatch = DOZEN.exec(text)
-  if (dozenMatch) {
-    const dozens = dozenMatch[1] ? Number(dozenMatch[1]) : 1
-    return Number.isFinite(dozens) && dozens > 0 ? dozens * 12 : null
-  }
-
-  const match = /\d+/.exec(text)
-  if (!match) return null
-  const n = Number(match[0])
-  return Number.isFinite(n) && n > 0 ? n : null
+  return parseServingsText(text)
 }
 
 function collectSteps(value: unknown, section: string | null, out: ExtractedStep[]): void {
@@ -177,9 +159,11 @@ export function fromJsonLd(node: JsonLdNode): PartialRecipe {
     description: firstString(node.description),
     author: firstString(node.author),
     publisher: firstString(node.publisher),
-    claimedTimeMinutes:
-      parseDurationMinutes(node.totalTime as string | undefined) ??
-      sumTimes(node.prepTime, node.cookTime),
+    claimedTimeMinutes: resolveClaimedTimeMinutes(
+      node.totalTime as string | undefined,
+      node.prepTime as string | undefined,
+      node.cookTime as string | undefined
+    ),
     servings: parseServings(node.recipeYield),
     yieldText: firstString(node.recipeYield),
     ingredients: collectIngredients(node.recipeIngredient),
@@ -188,11 +172,4 @@ export function fromJsonLd(node: JsonLdNode): PartialRecipe {
     heroImageUrl: firstUrl(node.image),
     extractionMethod: 'jsonld',
   }
-}
-
-function sumTimes(prep: unknown, cook: unknown): number | null {
-  const p = parseDurationMinutes(prep as string | undefined)
-  const c = parseDurationMinutes(cook as string | undefined)
-  if (p === null && c === null) return null
-  return (p ?? 0) + (c ?? 0)
 }

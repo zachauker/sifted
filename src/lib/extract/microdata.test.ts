@@ -114,4 +114,47 @@ describe('fromMicrodata', () => {
       'Simmer everything for 30 minutes.',
     ])
   })
+
+  it('splits a single comma-separated keywords meta value into individual tags', () => {
+    const html = `<div itemscope itemtype="http://schema.org/Recipe">
+      <span itemprop="name">Comma Keywords Test</span>
+      <meta itemprop="keywords" content="italian, pasta, one pot">
+    </div>`
+    const r = fromMicrodata(html)
+    expect(r?.tags).toEqual(
+      expect.arrayContaining([
+        { facet: 'cuisine', value: 'italian' },
+        { facet: 'ingredient', value: 'pasta' },
+        { facet: 'tag', value: 'one-pot' },
+      ])
+    )
+    expect(r?.tags).toHaveLength(3)
+  })
+
+  it('splits a single comma-separated recipeCategory meta value into individual tags', () => {
+    const html = `<div itemscope itemtype="http://schema.org/Recipe">
+      <span itemprop="name">Comma Category Test</span>
+      <meta itemprop="recipeCategory" content="Main Course, Dinner">
+    </div>`
+    expect(fromMicrodata(html)?.tags).toContainEqual({ facet: 'course', value: 'main' })
+  })
+
+  it('resolves servings from dozen- and zero-based yields consistently', () => {
+    const yieldPage = (yieldText: string) => `<div itemscope itemtype="http://schema.org/Recipe">
+      <span itemprop="name">Yield Test</span>
+      <span itemprop="recipeYield">${yieldText}</span>
+    </div>`
+    expect(fromMicrodata(yieldPage('1 dozen'))?.servings).toBe(12)
+    expect(fromMicrodata(yieldPage('2 dozen cookies'))?.servings).toBe(24)
+    expect(fromMicrodata(yieldPage('0 servings'))?.servings).toBeNull()
+  })
+
+  it('falls back to prepTime + cookTime when totalTime is absent', () => {
+    const html = `<div itemscope itemtype="http://schema.org/Recipe">
+      <span itemprop="name">Time Fallback Test</span>
+      <meta itemprop="prepTime" content="PT10M">
+      <meta itemprop="cookTime" content="PT25M">
+    </div>`
+    expect(fromMicrodata(html)?.claimedTimeMinutes).toBe(35)
+  })
 })

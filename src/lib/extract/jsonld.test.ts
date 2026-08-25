@@ -120,6 +120,49 @@ describe('fromJsonLd', () => {
     expect(r.claimedTimeMinutes).toBeNull()
   })
 
+  it('splits comma-separated keywords into individual tags', () => {
+    const r = fromJsonLd({
+      ...base,
+      keywords: 'italian, pasta, one pot',
+      recipeCategory: undefined,
+      recipeCuisine: undefined,
+    })
+    expect(r.tags).toEqual(
+      expect.arrayContaining([
+        { facet: 'cuisine', value: 'italian' },
+        { facet: 'ingredient', value: 'pasta' },
+        { facet: 'tag', value: 'one-pot' },
+      ])
+    )
+    expect(r.tags).toHaveLength(3)
+  })
+
+  it('splits a comma-separated recipeCategory into individual tags', () => {
+    const r = fromJsonLd({
+      ...base,
+      recipeCategory: 'Main Course, Dinner',
+      recipeCuisine: undefined,
+      keywords: undefined,
+    })
+    expect(r.tags).toContainEqual({ facet: 'course', value: 'main' })
+  })
+
+  it('resolves servings from dozen- and zero-based yields consistently', () => {
+    expect(fromJsonLd({ ...base, recipeYield: '1 dozen' }).servings).toBe(12)
+    expect(fromJsonLd({ ...base, recipeYield: '2 dozen cookies' }).servings).toBe(24)
+    expect(fromJsonLd({ ...base, recipeYield: '0 servings' }).servings).toBeNull()
+  })
+
+  it('falls back to prepTime + cookTime when totalTime is absent', () => {
+    const r = fromJsonLd({
+      ...base,
+      totalTime: undefined,
+      prepTime: 'PT10M',
+      cookTime: 'PT25M',
+    })
+    expect(r.claimedTimeMinutes).toBe(35)
+  })
+
   it('does not leak state between calls through the shared scratch element, even after malformed markup', () => {
     const withUnclosedTag = fromJsonLd({
       ...base,
