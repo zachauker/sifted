@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { eq, sql } from 'drizzle-orm'
 import { createTestDb, type TestDb } from '../helpers/db'
-import { upsertRecipe } from '@/lib/db/queries/recipes'
+import { upsertRecipe, applyNotionMetadata } from '@/lib/db/queries/recipes'
 import { recipes, ingredients, steps, recipeTags } from '@/lib/db/schema'
 import type { ExtractedRecipe } from '@/lib/extract/types'
 
@@ -26,6 +26,10 @@ const extracted: ExtractedRecipe = {
   narrativeHtml: '<p>This is not the crisp-skinned roast chicken you know.</p>',
   extractionMethod: 'jsonld',
 }
+
+const tagsOf = async (recipeId: string) =>
+  (await db.select().from(recipeTags).where(eq(recipeTags.recipeId, recipeId)))
+    .map((t) => `${t.facet}:${t.value}`).sort()
 
 describe('upsertRecipe', () => {
   it('writes the recipe and all its children', async () => {
@@ -129,6 +133,81 @@ describe('upsertRecipe', () => {
     expect(row.actualTimeMinutes).toBe(70)
   })
 
+  /* ---------------------------------------------------------------------- */
+  /* Tag ownership                                                            */
+  /* ---------------------------------------------------------------------- */
+
+  it('replaces its own extracted tags, including dropping one the new extraction no longer produces', async () => {
+    const url = 'https://x.com/tags-extracted'
+    const id = await upsertRecipe(db, { extracted, sourceUrl: url, sourceDomain: 'x.com' })
+
+    const revised: ExtractedRecipe = {
+      ...extracted,
+      tags: [{ facet: 'course', value: 'main' }, { facet: 'method', value: 'oven' }],
+    }
+    await upsertRecipe(db, { extracted: revised, sourceUrl: url, sourceDomain: 'x.com' })
+
+    expect(await tagsOf(id)).toEqual(['course:main', 'method:oven'])
+  })
+
+  it('leaves Notion-owned tags untouched when a re-import replaces the extracted ones', async () => {
+    const url = 'https://x.com/tags-notion'
+    const id = await upsertRecipe(db, { extracted, sourceUrl: url, sourceDomain: 'x.com' })
+    await applyNotionMetadata(db, id, {
+      rating: null, status: null,
+      tags: [{ facet: 'cuisine', value: 'korean' }, { facet: 'tag', value: 'weeknight' }],
+    })
+
+    const revised: ExtractedRecipe = { ...extracted, tags: [{ facet: 'method', value: 'oven' }] }
+    await upsertRecipe(db, { extracted: revised, sourceUrl: url, sourceDomain: 'x.com' })
+
+    // The extracted pair is gone and replaced; the two tags that came out of
+    // seven years of Notion curation are still here. They cannot be
+    // regenerated from the page, so a re-extraction has no business deleting
+    // them.
+    expect(await tagsOf(id)).toEqual(['cuisine:korean', 'method:oven', 'tag:weeknight'])
+  })
+
+  it('leaves user-owned tags untouched when a re-import replaces the extracted ones', async () => {
+    const url = 'https://x.com/tags-user'
+    const id = await upsertRecipe(db, { extracted, sourceUrl: url, sourceDomain: 'x.com' })
+    // Nothing writes `source: 'user'` yet — the tag editor lands in a later
+    // plan. The guard is written now because the bug it prevents is the same
+    // one that ate the Notion tags, and it is cheaper to hold the line than to
+    // re-lose the data.
+    await db.insert(recipeTags).values({ recipeId: id, facet: 'tag', value: 'kid-approved', source: 'user' })
+
+    const revised: ExtractedRecipe = { ...extracted, tags: [{ facet: 'method', value: 'oven' }] }
+    await upsertRecipe(db, { extracted: revised, sourceUrl: url, sourceDomain: 'x.com' })
+
+    expect(await tagsOf(id)).toEqual(['method:oven', 'tag:kid-approved'])
+  })
+
+  it('stamps the tags it writes as extracted', async () => {
+    const id = await upsertRecipe(db, { extracted, sourceUrl: 'https://x.com/tags-src', sourceDomain: 'x.com' })
+    const rows = await db.select().from(recipeTags).where(eq(recipeTags.recipeId, id))
+    expect(rows.map((r) => r.source)).toEqual(['extracted', 'extracted'])
+  })
+
+  it('does not fail when the new extraction produces a tag a human already owns', async () => {
+    const url = 'https://x.com/tags-collide'
+    const id = await upsertRecipe(db, { extracted, sourceUrl: url, sourceDomain: 'x.com' })
+    await db.insert(recipeTags).values({ recipeId: id, facet: 'method', value: 'oven', source: 'user' })
+
+    // `(recipe_id, facet, value)` is unique across sources, so re-inserting an
+    // extracted `method:oven` on top of the user's must not raise — and must
+    // not demote the user's row to `extracted`, which would put it right back
+    // in the path of the next re-import.
+    const revised: ExtractedRecipe = { ...extracted, tags: [{ facet: 'method', value: 'oven' }] }
+    await expect(
+      upsertRecipe(db, { extracted: revised, sourceUrl: url, sourceDomain: 'x.com' }),
+    ).resolves.toBe(id)
+
+    const rows = await db.select().from(recipeTags).where(eq(recipeTags.recipeId, id))
+    expect(rows).toHaveLength(1)
+    expect(rows[0].source).toBe('user')
+  })
+
   it('does not leave a partial recipe behind when a child insert fails', async () => {
     const broken: ExtractedRecipe = {
       ...extracted,
@@ -155,5 +234,33 @@ describe('upsertRecipe', () => {
     const id = await upsertRecipe(db, { extracted, sourceUrl: null, sourceDomain: null })
     const [row] = await db.select().from(recipes).where(eq(recipes.id, id))
     expect(row.sourceUrl).toBeNull()
+  })
+
+  it('accepts a historical creation date for migrated recipes', async () => {
+    const createdAt = new Date('2019-11-09T15:04:05.000Z')
+    const id = await upsertRecipe(db, {
+      extracted, sourceUrl: 'https://x.com/old', sourceDomain: 'x.com', createdAt,
+    })
+    const [row] = await db.select().from(recipes).where(eq(recipes.id, id))
+    expect(row.createdAt.toISOString()).toBe(createdAt.toISOString())
+  })
+
+  it('does not move createdAt on a later re-import', async () => {
+    const createdAt = new Date('2019-11-09T15:04:05.000Z')
+    const url = 'https://x.com/old2'
+    await upsertRecipe(db, { extracted, sourceUrl: url, sourceDomain: 'x.com', createdAt })
+    await upsertRecipe(db, { extracted, sourceUrl: url, sourceDomain: 'x.com' })
+
+    const [row] = await db.select().from(recipes).where(eq(recipes.sourceUrl, url))
+    expect(row.createdAt.toISOString()).toBe(createdAt.toISOString())
+  })
+
+  it('still defaults createdAt to now when none is supplied', async () => {
+    const before = Date.now()
+    const id = await upsertRecipe(db, {
+      extracted, sourceUrl: 'https://x.com/new', sourceDomain: 'x.com',
+    })
+    const [row] = await db.select().from(recipes).where(eq(recipes.id, id))
+    expect(row.createdAt.getTime()).toBeGreaterThanOrEqual(before - 1000)
   })
 })

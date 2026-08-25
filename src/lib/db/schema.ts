@@ -107,10 +107,26 @@ export const steps = sqliteTable('steps', {
 // One row per tag, carrying its facet. A single index gives AND-across-facets /
 // OR-within-facet filtering and the live counts in the filter rail. Adding a
 // facet later is data, not a migration.
+//
+// `source` records who wrote the tag, and it exists because `upsertRecipe`
+// replaces a recipe's children wholesale. Without it, re-importing a recipe to
+// repair a bad extraction also deletes every tag a human ever put on it —
+// seven years of Notion curation, or (once the UI lands) a tag typed in by
+// hand — none of which is regenerable from the page. With it, a re-import can
+// replace exactly the tags it derived from the source and leave the rest
+// alone.
+//
+// Ownership is a precedence ladder: extracted < notion < user. A machine
+// writer never takes a tag away from a human one, so the higher owner sticks
+// even when extraction independently produces the same tag. The
+// `(recipe_id, facet, value)` unique constraint deliberately does *not*
+// include `source`: a tag is a tag, and a recipe must not carry `course:bread`
+// twice under two owners.
 export const recipeTags = sqliteTable('recipe_tags', {
   recipeId: text('recipe_id').notNull().references(() => recipes.id, { onDelete: 'cascade' }),
   facet: text('facet', { enum: ['course', 'ingredient', 'method', 'cuisine', 'tag'] }).notNull(),
   value: text('value').notNull(),
+  source: text('source', { enum: ['extracted', 'notion', 'user'] }).notNull().default('extracted'),
 }, (t) => ({
   byFacetValue: index('recipe_tags_facet_value_idx').on(t.facet, t.value),
   uniqueTag: unique().on(t.recipeId, t.facet, t.value),

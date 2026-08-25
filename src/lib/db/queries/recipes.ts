@@ -1,8 +1,9 @@
-import { eq, sql } from 'drizzle-orm'
+import { and, eq, sql } from 'drizzle-orm'
 import { createId } from '@paralleldrive/cuid2'
 import type { Db } from '@/lib/db'
 import { recipes, ingredients, steps, recipeTags } from '@/lib/db/schema'
 import type { ExtractedRecipe } from '@/lib/extract/types'
+import type { TagAssignment } from '@/lib/taxonomy'
 
 /**
  * The single write path for a recipe.
@@ -21,6 +22,11 @@ export type UpsertInput = {
   sourceEncoding?: string | null
   enrichmentApplied?: boolean
   addedBy?: string | null
+  // A historical save date for a migrated recipe (e.g. from Notion). Applied
+  // only on insert — see the note beside `sourceFields` below for why a
+  // re-import must never touch it. Omit to fall back to the column default of
+  // "now", which is correct for a fresh import.
+  createdAt?: Date
 }
 
 export async function findBySourceUrl(db: Db, sourceUrl: string) {
@@ -108,11 +114,19 @@ export async function upsertRecipe(db: Db, input: UpsertInput): Promise<string> 
       await tx.update(recipes).set(sourceFields).where(eq(recipes.id, existing.id))
       recipeId = existing.id
     } else {
+      // `createdAt` is validated here, not just accepted, because it comes from
+      // parsing a Notion timestamp string upstream: a bad parse should fail the
+      // import loudly rather than silently write a corrupt date that only shows
+      // up later when someone sorts the library by age.
+      if (input.createdAt !== undefined && Number.isNaN(input.createdAt.getTime())) {
+        throw new Error(`upsertRecipe: createdAt is an invalid Date (sourceUrl: ${input.sourceUrl ?? 'null'})`)
+      }
       const [row] = await tx.insert(recipes).values({
         ...sourceFields,
         slug: makeSlug(extracted.title),
         sourceUrl: input.sourceUrl,
         addedBy: input.addedBy ?? null,
+        ...(input.createdAt !== undefined ? { createdAt: input.createdAt } : {}),
       }).returning({ id: recipes.id })
       recipeId = row.id
     }
@@ -123,7 +137,17 @@ export async function upsertRecipe(db: Db, input: UpsertInput): Promise<string> 
     // correct.
     await tx.delete(ingredients).where(eq(ingredients.recipeId, recipeId))
     await tx.delete(steps).where(eq(steps.recipeId, recipeId))
-    await tx.delete(recipeTags).where(eq(recipeTags.recipeId, recipeId))
+
+    // Tags are the one exception, and `source` is why. Ingredients and steps
+    // can only ever have come from the page, so replacing all of them is the
+    // same thing as replacing ours. Tags can also have come from a human —
+    // seven years of Notion curation, and soon a tag editor in the UI — and
+    // those are not derivable from the page, so re-extraction cannot produce
+    // them again once it has deleted them. Replacing wholesale here is exactly
+    // how the documented repair procedure ("re-import it") destroyed the tags
+    // it was meant to repair. We delete only what we wrote.
+    await tx.delete(recipeTags)
+      .where(and(eq(recipeTags.recipeId, recipeId), eq(recipeTags.source, 'extracted')))
 
     if (extracted.ingredients.length > 0) {
       await tx.insert(ingredients).values(extracted.ingredients.map((i) => ({
@@ -148,11 +172,18 @@ export async function upsertRecipe(db: Db, input: UpsertInput): Promise<string> 
     }
 
     if (extracted.tags.length > 0) {
+      // `onConflictDoNothing`, because `(recipe_id, facet, value)` is unique
+      // across every source: if a human already owns `method:oven`, the tag is
+      // already present and extraction has nothing to add. Doing nothing leaves
+      // their row — and their ownership — intact, where an upsert would demote
+      // it to `extracted` and put it right back in the path of the next
+      // re-import.
       await tx.insert(recipeTags).values(extracted.tags.map((t) => ({
         recipeId,
         facet: t.facet,
         value: t.value,
-      })))
+        source: 'extracted' as const,
+      }))).onConflictDoNothing()
     }
 
     // Delete-then-insert, never a bare insert: a re-import that only replaced
@@ -167,6 +198,81 @@ export async function upsertRecipe(db: Db, input: UpsertInput): Promise<string> 
     `)
 
     return recipeId
+  })
+}
+
+/**
+ * Layers Notion-only facts onto a recipe that `upsertRecipe` already wrote.
+ *
+ * Rating, status, and the original Notion tags cannot be produced by
+ * extraction — they only ever existed in Notion — so the migration applies
+ * them in a second pass after the import. That means this function must
+ * tolerate being run twice: a migration resumed after a crash will re-apply
+ * metadata to recipes it already touched. Tags rely on the
+ * `(recipe_id, facet, value)` unique constraint for that; rating and status
+ * are idempotent by construction.
+ *
+ * A null `rating` or `status` means "Notion had nothing in this cell", never
+ * "clear what is stored". The difference matters because two Notion rows whose
+ * links canonicalize to the same URL land on the same recipe: the second row,
+ * blank, would otherwise erase the rating the first row supplied. Ratings and
+ * cooking status are two of the three fields that exist nowhere but Notion, so
+ * there is no second chance at them.
+ *
+ * Wrapped in a transaction even though the function is independently
+ * idempotent (a crash between the two writes would leave a state a re-run
+ * heals): without it, a reader could observe the rating updated but the tags
+ * not yet added, and there's no reason to allow that when a transaction is
+ * free.
+ *
+ * No FTS re-index here. `upsertRecipe`'s FTS row indexes only
+ * title/ingredients/steps/notes/narrative (see the INSERT above) — tags were
+ * never part of the searchable text, so adding Notion tags cannot make that
+ * row stale.
+ */
+export async function applyNotionMetadata(
+  db: Db,
+  recipeId: string,
+  input: { rating: number | null; status: 'made_it' | 'want_to_make' | null; tags: TagAssignment[] },
+): Promise<void> {
+  await db.transaction(async (tx) => {
+    // Only the fields Notion actually had. Absent keys are left off the `.set()`
+    // entirely rather than written as null, which is what keeps a blank
+    // duplicate row from wiping a real value — while a non-null rating still
+    // sets one on a recipe that has none, and still overwrites one that does.
+    const patch: {
+      updatedAt: Date
+      rating?: number
+      status?: 'made_it' | 'want_to_make'
+    } = { updatedAt: new Date() }
+    if (input.rating !== null) patch.rating = input.rating
+    if (input.status !== null) patch.status = input.status
+
+    await tx.update(recipes).set(patch).where(eq(recipes.id, recipeId))
+
+    if (input.tags.length > 0) {
+      // Notion tags are user curation, so they are stamped `notion` and
+      // `upsertRecipe` will not touch them again.
+      //
+      // On conflict we *escalate* rather than skip. Extraction and Notion both
+      // producing `course:bread` is not a disagreement about the tag — both
+      // want it there — it is a question of ownership, and the unique
+      // constraint means only one row can answer. If the row stayed stamped
+      // `extracted`, the next re-import would delete a tag the user curated by
+      // hand: precisely the loss this column exists to prevent. Ownership
+      // therefore only ever climbs the ladder extracted -> notion -> user, and
+      // `setWhere` is what stops it going the other way — a `user` row is left
+      // exactly as it is.
+      await tx.insert(recipeTags)
+        .values(input.tags.map((t) => ({
+          recipeId, facet: t.facet, value: t.value, source: 'notion' as const,
+        })))
+        .onConflictDoUpdate({
+          target: [recipeTags.recipeId, recipeTags.facet, recipeTags.value],
+          set: { source: 'notion' },
+          setWhere: eq(recipeTags.source, 'extracted'),
+        })
+    }
   })
 }
 

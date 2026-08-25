@@ -15,12 +15,15 @@
     "db:studio": "drizzle-kit studio",
     "seed": "tsx --env-file-if-exists=.env.local scripts/seed-users.ts",
     "token": "tsx --env-file-if-exists=.env.local scripts/issue-token.ts",
-    "unenriched": "tsx --env-file-if-exists=.env.local scripts/list-unenriched.ts"
+    "unenriched": "tsx --env-file-if-exists=.env.local scripts/list-unenriched.ts",
+    "migrate": "tsx --env-file-if-exists=.env.local scripts/migrate-notion.ts",
+    "migrate:verify": "tsx --env-file-if-exists=.env.local scripts/migration-verify.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.120.0",
     "@libsql/client": "^0.17.4",
     "@mozilla/readability": "^0.6.0",
+    "@notionhq/client": "^5.26.0",
     "@paralleldrive/cuid2": "^3.3.0",
     "@vercel/blob": "^2.8.0",
     "@vercel/functions": "^3.9.5",
