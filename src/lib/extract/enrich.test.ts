@@ -93,3 +93,40 @@ describe('applyEnrichment', () => {
     expect(result.ingredients[0].quantity).toBeNull()
   })
 })
+
+describe('applyEnrichment tag canonicalization', () => {
+  it('slugs open-vocabulary tag values so variants collapse to one', async () => {
+    const result = await applyEnrichment(recipe, client({
+      description: null,
+      tags: [
+        { facet: 'tag', value: 'Meal Prep' },
+        { facet: 'tag', value: 'meal-prep' },
+        { facet: 'tag', value: 'Weeknight Dinner (Easy!)' },
+      ],
+      ingredients: [],
+    }))
+
+    expect(result.tags).toEqual([
+      { facet: 'tag', value: 'meal-prep' },
+      { facet: 'tag', value: 'weeknight-dinner-easy' },
+    ])
+  })
+
+  it('drops a tag value that is blank or slugs to nothing', async () => {
+    const result = await applyEnrichment(recipe, client({
+      description: null,
+      tags: [{ facet: 'tag', value: '   ' }, { facet: 'tag', value: '!!!' }],
+      ingredients: [],
+    }))
+    expect(result.tags).toEqual([])
+  })
+
+  it('does not slug values on the closed facets', async () => {
+    const result = await applyEnrichment(recipe, client({
+      description: null,
+      tags: [{ facet: 'method', value: 'slow-cooker' }, { facet: 'course', value: 'Main' }],
+      ingredients: [],
+    }))
+    expect(result.tags).toEqual([{ facet: 'method', value: 'slow-cooker' }])
+  })
+})

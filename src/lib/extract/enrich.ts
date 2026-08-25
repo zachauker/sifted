@@ -7,6 +7,26 @@ function isFacet(value: string): value is Facet {
 }
 
 /**
+ * Canonicalizes an open-vocabulary `tag` value.
+ *
+ * The four closed facets are validated against `lib/taxonomy`, so the model
+ * cannot invent values there. The `tag` facet is deliberately open — and is
+ * therefore the one place where the model is the sole author of a value. Left
+ * raw, it recreates exactly the problem this app was built to escape: the
+ * source Notion database accumulated 68 inconsistent tag options, and
+ * "Meal Prep", "meal-prep", and "  " would all become separate entries in the
+ * filter rail. Slugging collapses them to one. A value that slugs to empty is
+ * dropped by `isValidTag`.
+ */
+function slugify(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
+/**
  * Layers LLM-derived structure onto an already-extracted recipe. Enrichment is
  * strictly additive: it never overwrites data the source provided, and any
  * value outside the controlled vocabulary is dropped rather than persisted.
@@ -37,7 +57,10 @@ export async function applyEnrichment(
   const seen = new Set(recipe.tags.map((t) => `${t.facet}:${t.value}`))
   for (const tag of tags) {
     if (!isFacet(tag.facet)) continue
-    const candidate: TagAssignment = { facet: tag.facet, value: tag.value }
+    const candidate: TagAssignment = {
+      facet: tag.facet,
+      value: tag.facet === 'tag' ? slugify(tag.value) : tag.value,
+    }
     if (!isValidTag(candidate)) continue
     const id = `${candidate.facet}:${candidate.value}`
     if (seen.has(id)) continue
