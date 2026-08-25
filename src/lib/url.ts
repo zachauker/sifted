@@ -9,6 +9,11 @@ export type NormalizedUrl = { url: string; domain: string }
  * Produces the canonical form of a source URL, used both for storage and as the
  * dedupe key. Tracking parameters and fragments are removed so the same recipe
  * clipped from two different links resolves to one row.
+ *
+ * Query parameter order is preserved, not sorted: two links carrying the same
+ * parameters in a different order will not dedupe to the same key. This is a
+ * known, accepted limit rather than an oversight — recipe URLs essentially
+ * never carry multiple meaningful query parameters.
  */
 export function normalizeSourceUrl(input: string): NormalizedUrl {
   const raw = input.trim()
@@ -40,7 +45,8 @@ export function normalizeSourceUrl(input: string): NormalizedUrl {
   }
 
   const search = parsed.searchParams.toString()
-  const url = `${parsed.protocol}//${parsed.hostname}${parsed.pathname}${search ? `?${search}` : ''}`
+  const host = parsed.port ? `${parsed.hostname}:${parsed.port}` : parsed.hostname
+  const url = `${parsed.protocol}//${host}${parsed.pathname}${search ? `?${search}` : ''}`
 
   return { url, domain: parsed.hostname }
 }

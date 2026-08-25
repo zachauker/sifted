@@ -35,4 +35,14 @@ describe('normalizeSourceUrl', () => {
   it('throws on input that is not a URL', () => {
     expect(() => normalizeSourceUrl('not a url at all')).toThrow(/invalid url/i)
   })
+
+  it('preserves a non-default port', () => {
+    const r = normalizeSourceUrl('https://example.com:8443/r')
+    expect(r.url).toBe('https://example.com:8443/r')
+  })
+
+  it('drops the default port', () => {
+    const r = normalizeSourceUrl('https://example.com:443/r')
+    expect(r.url).toBe('https://example.com/r')
+  })
 })
