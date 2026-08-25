@@ -2334,6 +2334,54 @@ Plan 2 (persistence and the import API) needs from this work:
 - The `ExtractedRecipe` contract, which the Drizzle schema mirrors.
 - The `BlockedError` / `FetchFailedError` distinction, which determines whether a
   failed import goes to the needs-attention tray or is retried.
-- **The Bon Appétit finding from Task 12, Step 5.** If Bon Appétit blocks
-  datacenter fetches, the phone-supplied-HTML path is plan 2's first task rather
-  than a later refinement — it covers 28% of the library.
+- **The blocking picture, measured 2026-08-25 against real library URLs.** The
+  spec's central assumption was wrong in both directions:
+
+  | Publisher | Result | Library share |
+  | --- | --- | --- |
+  | Bon Appétit (3 URLs) | **200, clean JSON-LD** | 44 recipes (28%) |
+  | Café Delites | 200, clean JSON-LD | 8 |
+  | Easy Weeknight Recipes | 200, clean JSON-LD | 1 |
+  | Allrecipes (2 URLs) | **403 → `BlockedError`** | 4 |
+  | Simply Recipes | **403 → `BlockedError`** | 2 |
+
+  Bon Appétit — the publisher the spec called the biggest risk — fetches and
+  parses fine. Allrecipes and Simply Recipes block instead, and they block a
+  *residential* IP with a browser user agent, so they are fingerprinting more
+  than datacenter ranges; the phone-supplied-HTML fallback may not rescue them
+  either, and a headless browser may be required.
+
+  **This was measured from the user's home machine, not from Vercel.** Condé
+  Nast blocks datacenter IPs specifically, so the Bon Appétit result does not
+  prove a deployed function can fetch it. Settle that with one request from a
+  deployed function early in plan 2 — it is cheap and it decides whether the
+  phone-supplied-HTML path is a first-class feature or a rarely-used fallback.
+
+- **Notion `Link` values are not all bare URLs.** At least two rows store the
+  link as markdown (`[https://…](https://…)`). The migration must unwrap that
+  before calling `normalizeSourceUrl`, or those recipes fail to import.
+
+- **`narrativeHtml` requires attribute-level sanitization at the render layer.**
+  Measured during Task 7: Readability strips `<script>` and `<style>` tags, but
+  inline event handlers survive intact — `<p onclick="...">` and
+  `<img onerror="...">` both pass through unchanged. Since this HTML is stored
+  and later rendered into the recipe page, tag-stripping alone is not sufficient.
+  Sanitize on render, not on extract: doing it in both places would invite the
+  render layer to trust input it should not.
+
+- **Ingredient `rawText` and step text are untrusted third-party strings.** A
+  `<script>` element's text content survives into them as plain text. Render as
+  text, never via `dangerouslySetInnerHTML`.
+
+- **Serverless memory sizing.** JSDOM amplifies HTML roughly 300× in memory
+  (1 MB HTML → ~559 MB RSS). The fetch cap is set to 3 MB accordingly. If plan 2
+  processes imports in a background function, give it headroom and do not run
+  extractions concurrently in one instance.
+
+- **`narrativeHtml` requires attribute-level sanitization at the render layer.**
+  Measured during Task 7: Readability strips `<script>` and `<style>` tags, but
+  inline event handlers survive intact — `<p onclick="...">` and
+  `<img onerror="...">` both pass through unchanged. Since this HTML is stored
+  and later rendered into the recipe page, tag-stripping alone is not sufficient.
+  Sanitize on render, not on extract: doing it in both places would invite the
+  render layer to trust input it should not.
