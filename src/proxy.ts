@@ -47,13 +47,20 @@ export default auth(decide)
  * assets are excluded too, so a phone loading the app shell doesn't pay for
  * a session check (and a JWT decode) per JS chunk and optimized image.
  *
- * Note this does *not* cover every file under `public/` — only Next's own
- * `_next/static`, `_next/image`, and `favicon.ico`. Nothing in this app
- * currently references a public asset outside those (no logo, no manifest
- * icon), so it hasn't mattered yet; adding one later would need either an
- * addition here or would otherwise require a session to load, which for an
- * image would fail silently rather than loudly.
+ * Also excluded: the PWA manifest and its icons (`public/manifest.json`,
+ * `public/icon.svg`, `public/icon-192.png`, `public/icon-512.png`,
+ * `public/apple-touch-icon.png` — see `src/app/layout.tsx`'s `manifest` and
+ * `icons.apple` fields). This is exactly the case the comment above used to
+ * warn about: a browser fetches the manifest to decide whether "Add to Home
+ * Screen" is available, often from `/login` itself, before anyone has
+ * signed in — if that request had been left to fall through to `decide`
+ * like an ordinary page, it would come back as a 307 to `/login` instead of
+ * JSON, which is not a page a manifest parser can do anything useful with,
+ * and installability would break silently for a signed-out visitor with no
+ * error anywhere to point at why.
  */
 export const config = {
-  matcher: ['/((?!api/auth|api/import|_next/static|_next/image|favicon.ico).*)'],
+  matcher: [
+    '/((?!api/auth|api/import|_next/static|_next/image|favicon.ico|manifest.json|icon.svg|icon-192.png|icon-512.png|apple-touch-icon.png).*)',
+  ],
 }

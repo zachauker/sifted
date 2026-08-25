@@ -58,6 +58,17 @@ describe('middleware matcher (the actual `config.matcher` the middleware runs, n
     ['/_next/static/chunks/main.js', false],
     ['/_next/image', false],
     ['/favicon.ico', false],
+    // The PWA manifest and its icons must be fetchable while signed out —
+    // a browser requests the manifest to decide whether "Add to Home
+    // Screen" is available, commonly from the /login page itself, before
+    // anyone has authenticated. See the comment on `config` in
+    // `src/proxy.ts` for what goes wrong if these ever fall through to
+    // `decide` like an ordinary page.
+    ['/manifest.json', false],
+    ['/icon.svg', false],
+    ['/icon-192.png', false],
+    ['/icon-512.png', false],
+    ['/apple-touch-icon.png', false],
   ])('never runs the middleware for %s', (path, expected) => {
     expect(
       unstable_doesMiddlewareMatch({ config, url: `http://localhost:3000${path}` }),
