@@ -130,6 +130,14 @@ export function RecipeView({ recipe }: { recipe: RecipeDetail }) {
               // encoded for this purpose, per image, on request. Same call the
               // library cards make, for the same reason.
               unoptimized
+              // This is the LCP element of the most important page in the
+              // app: the photo above the fold on the recipe you just
+              // opened. `priority` skips `next/image`'s default lazy
+              // loading and adds a preload hint, instead of making the
+              // largest paint on the page wait on the browser noticing
+              // it's scrolled into view — which, above the fold, it
+              // already is.
+              priority
               className="mt-5 aspect-[3/2] w-full rounded-xl object-cover"
             />
           )}

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, afterEach, vi } from 'vitest'
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import { cleanup, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import '@testing-library/jest-dom/vitest'
@@ -50,6 +50,16 @@ function renderLibrary(entries = library()) {
   return render(<LibraryView entries={entries} initialState={{ ...EMPTY_FILTER_STATE }} />)
 }
 
+/**
+ * The visible results-summary sentence — scoped to its own element rather
+ * than found by `getByText`, because the same sentence also lands (after a
+ * debounce) in a second, screen-reader-only `role="status"` element right
+ * beside it.
+ */
+function resultsSummary(): string {
+  return screen.getByTestId('results-summary').textContent ?? ''
+}
+
 function cardTitles(): string[] {
   return screen
     .getAllByRole('link')
@@ -74,6 +84,20 @@ function useNarrowViewport(matches: boolean) {
   }))
 }
 
+// jsdom (unlike every real browser this app runs in) implements no
+// `matchMedia` at all — `window.matchMedia` is `undefined` here unless a
+// test stubs it. `useNarrowViewport` now guesses narrow for the one render
+// before an effect can ask, which is the fix for the lockout in Defect 1,
+// but it means "no stub" no longer means "wide" the way it used to.
+// Every test in this file except the ones under "the rail on a phone"
+// below is written against a desktop layout, so a wide `matchMedia` is
+// stubbed by default here — standing in for the real `matchMedia` a
+// browser always provides — and overridden explicitly where a test wants
+// a phone.
+beforeEach(() => {
+  useNarrowViewport(false)
+})
+
 describe('filtering from the rail', () => {
   it('narrows the grid when a value is clicked', async () => {
     renderLibrary()
@@ -82,7 +106,7 @@ describe('filtering from the rail', () => {
     await userEvent.click(screen.getByRole('checkbox', { name: 'Seafood, 3 recipes' }))
 
     expect(cardTitles()).toEqual(['Ceviche', 'Salmon Traybake', 'Shrimp Tacos'])
-    expect(screen.getByText('Showing 3 of 6 recipes')).toBeInTheDocument()
+    expect(resultsSummary()).toBe('Showing 3 of 6 recipes')
   })
 
   it('updates the other facets’ counts to what is available within the result', async () => {
@@ -185,7 +209,30 @@ describe('filtering from the rail', () => {
     // moving it would pull the next row out from under the cursor.
     const dessert = screen.getByRole('checkbox', { name: 'Dessert, 0 recipes' })
     expect(dessert).toBeInTheDocument()
-    expect(dessert).toBeDisabled()
+    // Not the real `disabled` attribute — that would also pull the row
+    // out of the tab order, so a keyboard or screen-reader user would
+    // never learn "Dessert" exists at all. `aria-disabled` marks it inert
+    // without hiding it from anyone.
+    expect(dessert).toHaveAttribute('aria-disabled', 'true')
+    expect(dessert).toBeEnabled()
+  })
+
+  it('leaves a value that leads nowhere reachable by keyboard, and ticking it a no-op', async () => {
+    renderLibrary()
+
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Seafood, 3 recipes' }))
+    const dessert = screen.getByRole('checkbox', { name: 'Dessert, 0 recipes' })
+
+    // Still tabbable — the entire point of `aria-disabled` over `disabled`
+    // — and clicking it changes nothing, because it would lead to an
+    // empty grid.
+    dessert.focus()
+    expect(dessert).toHaveFocus()
+
+    await userEvent.click(dessert)
+
+    expect(dessert).not.toBeChecked()
+    expect(cardTitles()).toEqual(['Ceviche', 'Salmon Traybake', 'Shrimp Tacos'])
   })
 
   it('renders no heading for a facet nothing in the library carries', () => {
@@ -284,5 +331,135 @@ describe('the rail on a phone', () => {
 
     expect(screen.getByRole('checkbox', { name: 'Seafood, 3 recipes' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /^filters/i })).not.toBeInTheDocument()
+  })
+})
+
+/**
+ * Defect 4: the sheet opened, scrolled, and closed three ways already, but
+ * carried none of the semantics or focus management that make it an
+ * actual dialog rather than a `<div>` that happens to look like one — no
+ * `role="dialog"`/`aria-modal`, no focus move on open, no focus return on
+ * close, no trap (Tab walked into the 156 cards behind the scrim), and no
+ * body scroll lock (iOS scroll-chained past the sheet's end).
+ */
+describe('the sheet as a dialog', () => {
+  it('is not a dialog at all on a wide viewport, where it is a persistent sidebar', () => {
+    useNarrowViewport(false)
+    renderLibrary()
+
+    // A screen reader must not be told the rest of the page is unavailable
+    // when the rail is simply always on screen beside it.
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('becomes a labelled, modal dialog only once open on a narrow viewport', async () => {
+    useNarrowViewport(true)
+    renderLibrary()
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Filters' }))
+
+    const dialog = screen.getByRole('dialog', { name: 'Filters' })
+    expect(dialog).toHaveAttribute('aria-modal', 'true')
+  })
+
+  it('moves focus into the sheet the moment it opens', async () => {
+    useNarrowViewport(true)
+    renderLibrary()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Filters' }))
+
+    expect(document.activeElement).toBe(screen.getByRole('dialog', { name: 'Filters' }))
+  })
+
+  it('returns focus to the button that opened it when closed on Escape', async () => {
+    useNarrowViewport(true)
+    renderLibrary()
+
+    const open = screen.getByRole('button', { name: 'Filters' })
+    await userEvent.click(open)
+    await userEvent.keyboard('{Escape}')
+
+    // Left alone, Escape drops focus to <body> — indistinguishable, to
+    // anyone not looking at the screen, from focus going nowhere at all.
+    expect(document.activeElement).toBe(open)
+  })
+
+  it('returns focus to the button that opened it when closed on the scrim', async () => {
+    useNarrowViewport(true)
+    renderLibrary()
+
+    const open = screen.getByRole('button', { name: 'Filters' })
+    await userEvent.click(open)
+    // The scrim carries no accessible role (`aria-hidden`), so it's found
+    // by the one thing distinguishing it from every other fixed-position
+    // layer: no other element in the sheet is a plain, unlabelled sibling
+    // of the dialog sitting behind it. Reached instead through the DOM
+    // directly, the same way a real pointer tap would land on it.
+    const scrim = document.querySelector('[aria-hidden="true"].fixed.inset-0')
+    expect(scrim).not.toBeNull()
+    await userEvent.click(scrim as Element)
+
+    expect(document.activeElement).toBe(open)
+  })
+
+  it('returns focus to the button that opened it when closed on "Show N recipes"', async () => {
+    useNarrowViewport(true)
+    renderLibrary()
+
+    const open = screen.getByRole('button', { name: 'Filters' })
+    await userEvent.click(open)
+    await userEvent.click(screen.getByRole('button', { name: 'Show 6 recipes' }))
+
+    expect(document.activeElement).toBe(open)
+  })
+
+  it('traps Tab inside the sheet rather than letting it reach the 156 cards behind the scrim', async () => {
+    useNarrowViewport(true)
+    renderLibrary()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Filters' }))
+    const dialog = screen.getByRole('dialog', { name: 'Filters' })
+
+    // More tab stops than the sheet has controls, forward and back: every
+    // one of them has to land back inside the dialog, never on the sort
+    // select or a card link sitting behind the scrim.
+    for (let i = 0; i < 12; i++) {
+      await userEvent.tab()
+      expect(dialog.contains(document.activeElement)).toBe(true)
+    }
+    for (let i = 0; i < 12; i++) {
+      await userEvent.tab({ shift: true })
+      expect(dialog.contains(document.activeElement)).toBe(true)
+    }
+  })
+
+  it('takes the rest of the page out of the tab order and the accessibility tree while the sheet is open', async () => {
+    useNarrowViewport(true)
+    renderLibrary()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Filters' }))
+
+    expect(screen.getByTestId('library-toolbar')).toHaveAttribute('inert', '')
+    expect(screen.getByTestId('library-grid-region')).toHaveAttribute('inert', '')
+
+    await userEvent.click(screen.getByRole('button', { name: /show \d+ recipe/i }))
+
+    expect(screen.getByTestId('library-toolbar')).not.toHaveAttribute('inert')
+    expect(screen.getByTestId('library-grid-region')).not.toHaveAttribute('inert')
+  })
+
+  it('locks the body scroll while open, and releases it on close', async () => {
+    useNarrowViewport(true)
+    renderLibrary()
+
+    expect(document.body.style.overflow).not.toBe('hidden')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Filters' }))
+    expect(document.body.style.overflow).toBe('hidden')
+
+    await userEvent.keyboard('{Escape}')
+    expect(document.body.style.overflow).not.toBe('hidden')
   })
 })

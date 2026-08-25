@@ -3,13 +3,36 @@
 // The only tests in this repo that need a DOM. Everything else runs in the
 // node environment configured in `vitest.config.mts`; this docblock opts
 // just this file into jsdom.
-import { describe, it, expect, afterEach, vi } from 'vitest'
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import '@testing-library/jest-dom/vitest'
 import type { LibraryEntry } from '@/lib/db/queries/library'
 import { EMPTY_FILTER_STATE, parseFilterState } from '@/lib/library/filter'
 import { LibraryView } from '@/components/library/library-view'
+
+// jsdom implements no `matchMedia` at all, unlike every real browser this
+// app runs in — `window.matchMedia` is `undefined` here unless stubbed.
+// `useNarrowViewport` (see `src/components/library/use-narrow-viewport.ts`)
+// guesses narrow for the single render before an effect can measure the
+// real viewport, which is deliberate: it is the fix for a lockout where a
+// wrong "wide" guess left the filter toggle unreachable. But every test in
+// this file is written against the desktop layout, so a wide `matchMedia`
+// is stubbed here to stand in for the real one a browser always provides.
+beforeEach(() => {
+  window.innerWidth = 1440
+  window.innerHeight = 900
+  vi.stubGlobal('matchMedia', (query: string) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    addListener: () => {},
+    removeListener: () => {},
+    dispatchEvent: () => false,
+  }))
+})
 
 afterEach(() => {
   cleanup()
@@ -39,6 +62,17 @@ function renderLibrary(entries: LibraryEntry[]) {
   return render(<LibraryView entries={entries} initialState={{ ...EMPTY_FILTER_STATE }} />)
 }
 
+/**
+ * The visible results-summary sentence — scoped to its own element rather
+ * than found by `getByText`, because the same sentence also lands (after a
+ * debounce) in a second, screen-reader-only `role="status"` element right
+ * beside it. Querying by text alone would find both once they agree, which
+ * they eventually always do.
+ */
+function resultsSummary(): string {
+  return screen.getByTestId('results-summary').textContent ?? ''
+}
+
 /** The recipe cards, in the order they appear on screen. */
 function cardTitles(): string[] {
   return screen
@@ -46,6 +80,13 @@ function cardTitles(): string[] {
     .filter((link) => link.getAttribute('href')?.startsWith('/recipes/'))
     .map((link) => within(link).getByRole('heading').textContent ?? '')
 }
+
+describe('the page structure', () => {
+  it('has exactly one <h1>, like every other route', () => {
+    renderLibrary([entry()])
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
+  })
+})
 
 describe('the recipe grid', () => {
   it('renders every recipe as a card showing its title', () => {
@@ -71,7 +112,7 @@ describe('the recipe grid', () => {
 
   it('says how many recipes are showing', () => {
     renderLibrary([entry(), entry()])
-    expect(screen.getByText('Showing 2 recipes')).toBeInTheDocument()
+    expect(resultsSummary()).toBe('Showing 2 recipes')
   })
 
   it('shows a rating and a time on the card when they are known', () => {
@@ -179,7 +220,7 @@ describe('the empty states', () => {
     )
 
     expect(screen.getByText('No recipes match these filters.')).toBeInTheDocument()
-    expect(screen.getByText('Showing 0 of 2 recipes')).toBeInTheDocument()
+    expect(resultsSummary()).toBe('Showing 0 of 2 recipes')
 
     await userEvent.click(screen.getByRole('button', { name: 'Clear all filters' }))
     expect(cardTitles()).toEqual(['Brownies', 'Chana Masala'])
@@ -262,7 +303,7 @@ describe('search', () => {
     await userEvent.type(searchBox(), 'salmon')
 
     expect(cardTitles()).toEqual(['Miso Butter Salmon'])
-    expect(screen.getByText(/matched titles, publishers, and tags/i)).toBeInTheDocument()
+    expect(resultsSummary()).toMatch(/matched titles, publishers, and tags/i)
   })
 
   it('composes with the filter rail: narrows the already-filtered set rather than replacing it', async () => {
@@ -306,7 +347,7 @@ describe('search', () => {
     // losing your place or your cursor.
     await userEvent.type(box, 'gochujang{enter}')
 
-    await waitFor(() => expect(screen.getByText(/matched inside recipes/i)).toBeInTheDocument())
+    await waitFor(() => expect(resultsSummary()).toMatch(/matched inside recipes/i))
 
     expect(fetchMock).toHaveBeenCalledWith('/api/search?q=gochujang')
     expect(cardTitles()).toEqual(['Chana Masala'])
@@ -348,7 +389,60 @@ describe('search', () => {
     await userEvent.clear(box)
     await userEvent.type(box, 'salmon')
 
-    expect(screen.getByText(/matched titles, publishers, and tags/i)).toBeInTheDocument()
+    expect(resultsSummary()).toMatch(/matched titles, publishers, and tags/i)
     expect(cardTitles()).toEqual([salmon.title])
+  })
+
+  /**
+   * `aria-live="polite"` wrapped the visible summary directly and fired
+   * on every keystroke: typing "chicken" queued seven full sentences for
+   * a screen reader, one per character. The fix keeps the visible text
+   * instant (covered by the tests above) but only announces the settled
+   * value, half a second after typing stops — see `useDebouncedValue` in
+   * `library-view.tsx`.
+   */
+  describe('the results summary announced to screen readers', () => {
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    /** The screen-reader-only `role="status"` twin of the visible summary. */
+    function announcedSummary(): string {
+      return screen.getByRole('status').textContent ?? ''
+    }
+
+    it('does not update the announcement on every keystroke, only once typing pauses', () => {
+      vi.useFakeTimers()
+      renderLibrary(library().all)
+
+      const beforeTyping = announcedSummary()
+
+      // `fireEvent`, not `userEvent`, and a single change rather than a
+      // key at a time: what's under test is the debounce timer, and
+      // `userEvent.type` drives its own real-time-based key-by-key
+      // simulation that fake timers fight rather than cooperate with.
+      // One change event is exactly what the search box's own `onChange`
+      // sees for any single keystroke.
+      act(() => {
+        fireEvent.change(searchBox(), { target: { value: 'salmon' } })
+      })
+
+      // The visible summary is already correct — it is never debounced —
+      // but the announcement has not caught up, because typing has not
+      // paused for long enough yet.
+      expect(resultsSummary()).toMatch(/matched titles, publishers, and tags/i)
+      expect(announcedSummary()).toBe(beforeTyping)
+
+      act(() => {
+        vi.advanceTimersByTime(500)
+      })
+
+      expect(announcedSummary()).toMatch(/matched titles, publishers, and tags/i)
+    })
+
+    it('is a role="status" region, carrying its own implicit polite announcement', () => {
+      renderLibrary(library().all)
+      expect(screen.getByRole('status')).toBeInTheDocument()
+    })
   })
 })

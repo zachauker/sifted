@@ -357,7 +357,15 @@ export function EditControls() {
               narrative fold, and a second on this page makes "the group" an
               ambiguous thing to ask for. Each star carries its own label
               ("4 stars"), which is what a screen reader announces anyway. */}
-          <div className="flex items-center gap-0.5">
+          <div className="flex items-center">
+            {/* A mistap here writes a wrong rating whose only undo is the
+                "Clear" link below, so every star gets a full 44px tap
+                target — `min-h-11 min-w-11` around the same `text-xl`
+                glyph — rather than the glyph's own tiny box. The stars
+                still sit close together visually (there is no gap
+                between the buttons themselves); it is the invisible
+                padding inside each one that keeps a thumb from landing on
+                the wrong star. */}
             {RATINGS.map((value) => {
               const filled = fields.rating !== null && value <= fields.rating
               return (
@@ -367,7 +375,7 @@ export function EditControls() {
                   aria-pressed={fields.rating === value}
                   aria-label={ratingPhrase(value)}
                   onClick={() => chooseRating(value)}
-                  className={`rounded px-0.5 text-xl leading-none outline-offset-2 focus-visible:outline-2 ${
+                  className={`flex min-h-11 min-w-11 items-center justify-center rounded text-xl leading-none outline-offset-2 focus-visible:outline-2 ${
                     filled
                       ? 'text-amber-500'
                       : 'text-neutral-300 hover:text-amber-300 dark:text-neutral-600'
@@ -387,7 +395,7 @@ export function EditControls() {
             <button
               type="button"
               onClick={() => chooseRating(null)}
-              className="ml-1 text-xs text-neutral-500 underline underline-offset-2 dark:text-neutral-400"
+              className="inline-flex min-h-11 items-center px-2 text-xs text-neutral-500 underline underline-offset-2 dark:text-neutral-400"
             >
               Clear
             </button>
@@ -401,7 +409,7 @@ export function EditControls() {
               type="button"
               aria-pressed={fields.status === value}
               onClick={() => toggleStatus(value)}
-              className={`rounded-full px-3 py-1 text-sm ${
+              className={`inline-flex min-h-11 items-center justify-center rounded-full px-4 text-sm ${
                 fields.status === value
                   ? 'bg-neutral-800 text-white dark:bg-neutral-100 dark:text-neutral-900'
                   : 'border border-black/15 text-neutral-600 dark:border-white/20 dark:text-neutral-300'
@@ -443,12 +451,18 @@ export function EditControls() {
               setTimeDraft(event.target.value)
               clearFailure()
             }}
-            className="w-20 rounded-md border border-black/15 bg-white px-2 py-1 text-sm dark:border-white/20 dark:bg-neutral-900"
+            // `text-base` (16px) below the `sm` breakpoint: iOS Safari
+            // zooms in on focus for any input under 16px and does not
+            // zoom back out on blur — this field is edited mid-cook, on a
+            // phone, so leaving the page zoomed afterward is the worst
+            // possible moment for it. `w-24` (not the original `w-20`)
+            // gives the larger digits room without wrapping.
+            className="min-h-11 w-24 rounded-md border border-black/15 bg-white px-2 py-1 text-base sm:text-sm dark:border-white/20 dark:bg-neutral-900"
           />
           <span className="text-sm text-neutral-600 dark:text-neutral-300">minutes</span>
           <button
             type="submit"
-            className="rounded-md border border-black/15 px-2 py-1 text-sm dark:border-white/20"
+            className="min-h-11 rounded-md border border-black/15 px-4 text-sm dark:border-white/20"
           >
             Save
           </button>
@@ -471,12 +485,17 @@ export function EditControls() {
             autoFocus
             onChange={(event) => setNotesDraft(event.target.value)}
             placeholder="What did you change? What would you do differently?"
-            className="w-full rounded-lg border border-black/15 bg-white p-2 text-[15px] leading-relaxed dark:border-white/20 dark:bg-neutral-900"
+            // `text-base` (16px) below `sm`: this field autofocuses, so
+            // the iOS zoom-on-focus this fixes fires the instant the panel
+            // opens, on the one field in the app most likely to be typed
+            // one-handed. `sm:text-[15px]` keeps the original reading size
+            // once the viewport is wide enough that focus doesn't zoom.
+            className="w-full rounded-lg border border-black/15 bg-white p-2 text-base leading-relaxed sm:text-[15px] dark:border-white/20 dark:bg-neutral-900"
           />
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <button
               type="submit"
-              className="rounded-md bg-neutral-800 px-3 py-1 text-sm text-white dark:bg-neutral-100 dark:text-neutral-900"
+              className="min-h-11 rounded-md bg-neutral-800 px-4 text-sm text-white dark:bg-neutral-100 dark:text-neutral-900"
             >
               Save notes
             </button>
@@ -489,7 +508,7 @@ export function EditControls() {
                 setEditingNotes(false)
                 clearFailure()
               }}
-              className="text-sm text-neutral-500 underline underline-offset-2 dark:text-neutral-400"
+              className="inline-flex min-h-11 items-center px-2 text-sm text-neutral-500 underline underline-offset-2 dark:text-neutral-400"
             >
               Cancel
             </button>
@@ -513,7 +532,7 @@ export function EditControls() {
               setNotesDraft(fields.notes ?? '')
               setEditingNotes(true)
             }}
-            className={`text-sm text-neutral-600 underline underline-offset-2 dark:text-neutral-300 ${
+            className={`inline-flex min-h-11 items-center text-sm text-neutral-600 underline underline-offset-2 dark:text-neutral-300 ${
               fields.notes ? 'mt-2' : ''
             }`}
           >

@@ -187,6 +187,29 @@ describe('the recipe header', () => {
     )
   })
 
+  it('does not lazy-load the hero image, since it is the page\'s LCP element', () => {
+    render(
+      <RecipeView
+        recipe={recipe({
+          images: [
+            {
+              role: 'source_hero',
+              blobUrl: 'https://blob.example.com/hero.webp',
+              thumbUrl: 'https://blob.example.com/thumb.webp',
+              width: 1600,
+              height: 1067,
+            },
+          ],
+        })}
+      />,
+    )
+
+    // `priority` on `next/image` is what turns this off — without it, the
+    // image above the fold on the most important page in the app waits on
+    // the browser noticing it scrolled into view before it starts loading.
+    expect(document.querySelector('img')).not.toHaveAttribute('loading', 'lazy')
+  })
+
   it('renders no broken image for a recipe with no image at all', () => {
     render(<RecipeView recipe={recipe({ images: [] })} />)
 
@@ -349,6 +372,21 @@ describe('the ingredients', () => {
     expect(box).not.toBeChecked()
   })
 
+  it('gives the whole ingredient row — the most-tapped element in the app — a full-height tap target', () => {
+    render(
+      <RecipeView recipe={recipe({ ingredients: [ingredient(0, 'Kosher salt')] })} />,
+    )
+
+    // jsdom does not compute real layout (`getBoundingClientRect` reads
+    // zero regardless of CSS), so a literal 44px cannot be measured here —
+    // see the real-viewport measurement in the task report instead. This
+    // asserts on the class doing the work: the label around the checkbox
+    // and its text is what has to carry the tap target, not the 16px
+    // checkbox glyph alone.
+    const box = screen.getByRole('checkbox', { name: 'Kosher salt' })
+    expect(box.closest('label')).toHaveClass('min-h-11')
+  })
+
   it('renders no ingredients heading for a recipe that has none', () => {
     render(<RecipeView recipe={recipe({ ingredients: [] })} />)
 
@@ -450,6 +488,23 @@ describe('the narrative fold', () => {
     expect(screen.getByText(/word239/)).not.toBeVisible()
   })
 
+  it('carries a visual open/closed indicator that actually reacts to the `open` attribute', () => {
+    // The marker replaces the native `<details>` triangle with a static
+    // one (`list-none` plus a rendered `▸`), which only means anything if
+    // something rotates it open vs. closed. `group-open:` is a Tailwind
+    // *variant* — it does not show up as a literal class name on the
+    // marker, only as a selector inside the compiled stylesheet keyed to
+    // the ancestor's `[open]` attribute — so what's checked here is the
+    // wiring: the marker asks for `group-open:rotate-90`, and the
+    // ancestor it needs an `[open]` to act on is marked `group`.
+    render(<RecipeView recipe={recipe({ narrativeHtml: narrative })} />)
+
+    const fold = screen.getByRole('group')
+    expect(fold).toHaveClass('group')
+    const marker = fold.querySelector('summary span[aria-hidden="true"]')
+    expect(marker).toHaveClass('group-open:rotate-90')
+  })
+
   it('names how long the story is, so the reader can decide before opening it', () => {
     render(<RecipeView recipe={recipe({ narrativeHtml: narrative })} />)
 
@@ -527,6 +582,21 @@ describe('the household notes', () => {
 describe('the edit controls', () => {
   const patchBody = (fetchMock: ReturnType<typeof stubPatch>, call = 0) =>
     JSON.parse(String(fetchMock.mock.calls[call][1]?.body))
+
+  it('gives every rating star a full 44px tap target, not just its glyph', () => {
+    // A mistap on a 24×20px star with 2px of separation writes a wrong
+    // rating whose only undo is a small text link — see the "Clear"
+    // target test below. jsdom cannot measure real pixels (see the note
+    // on the ingredient-row test above), so this checks the classes that
+    // produce the target instead.
+    render(<RecipeView recipe={recipe({ rating: null })} />)
+
+    for (const label of ['1 star', '2 stars', '3 stars', '4 stars', '5 stars']) {
+      const star = screen.getByRole('button', { name: label })
+      expect(star).toHaveClass('min-h-11')
+      expect(star).toHaveClass('min-w-11')
+    }
+  })
 
   it('sends only the field that changed', async () => {
     const fetchMock = stubPatch((patch) => ({ ok: true, stored: patch }))

@@ -15,9 +15,22 @@ import type { FilterToken } from '@/lib/library/filter'
  *
  * Everything here is a real `<input type="checkbox">` inside a `<label>`
  * inside a `<fieldset>` with a `<legend>`. That is not minimalism for its
- * own sake: it is what makes the rail tabbable, space-togglable,
- * group-announced and correctly disabled with no ARIA of our own and no
- * keyboard handlers to get wrong.
+ * own sake: it is what makes the rail tabbable, space-togglable, and
+ * group-announced with no ARIA of our own and no keyboard handlers to get
+ * wrong.
+ *
+ * ## Reachable but empty, not removed from the tab order
+ *
+ * A value with a zero live count is greyed out, not hidden — the whole
+ * point of `disabled: count === 0 && !isSelected` in `facets.ts` is that
+ * the value can still be *seen*, so nobody wonders where "Dessert" went
+ * the moment they tick "Seafood". The real HTML `disabled` attribute
+ * undercuts that for anyone not using a mouse: it also removes the
+ * element from the tab order, so a keyboard or screen-reader user never
+ * lands on the row at all and never learns the value exists. `aria-disabled`
+ * plus a no-op change handler gets both properties at once — greyed,
+ * inert, and still tabbable — at the cost of owning the "inert" half
+ * ourselves instead of getting it from the browser for free.
  */
 
 function countLabel(count: number): string {
@@ -34,7 +47,7 @@ function ValueRow({
   return (
     <li>
       <label
-        className={`flex cursor-pointer items-baseline gap-2 rounded px-1 py-1 text-sm ${
+        className={`flex min-h-11 cursor-pointer items-center gap-2 rounded px-1 py-2 text-sm ${
           value.disabled
             ? 'cursor-default text-neutral-400 dark:text-neutral-600'
             : 'hover:bg-black/5 dark:hover:bg-white/10'
@@ -43,12 +56,17 @@ function ValueRow({
         <input
           type="checkbox"
           checked={value.selected}
-          disabled={value.disabled}
-          onChange={() => onToggle(value.token)}
-          className="accent-current"
+          aria-disabled={value.disabled || undefined}
+          // Not the real `disabled` attribute — see the note above. The
+          // row stays focusable and announced; this just makes ticking it
+          // a no-op instead of a filter that leads nowhere.
+          onChange={() => {
+            if (!value.disabled) onToggle(value.token)
+          }}
+          className={`accent-current ${value.disabled ? 'opacity-50' : ''}`}
         />
         <span className="flex-1">{value.label}</span>
-        <span aria-hidden="true" className="tabular-nums text-neutral-500 dark:text-neutral-400">
+        <span aria-hidden="true" className="tabular-nums text-neutral-600 dark:text-neutral-300">
           {value.count}
         </span>
         {/* Leading comma so the accessible name reads "Seafood, 11
@@ -86,7 +104,7 @@ function FacetSection({
         <button
           type="button"
           onClick={() => setExpanded((open) => !open)}
-          className="mt-1 px-1 text-xs underline underline-offset-2"
+          className="mt-1 inline-flex min-h-11 items-center px-1 text-xs underline underline-offset-2"
         >
           {expanded ? 'Show fewer' : `Show ${folded.length} more`}
         </button>
@@ -111,7 +129,11 @@ export function FilterRail({
       <div className="flex items-baseline justify-between gap-2">
         <h2 className="text-sm font-semibold">Filters</h2>
         {selectedCount > 0 && (
-          <button type="button" onClick={onClear} className="text-xs underline underline-offset-2">
+          <button
+            type="button"
+            onClick={onClear}
+            className="inline-flex min-h-11 items-center px-2 text-xs underline underline-offset-2"
+          >
             Clear all
           </button>
         )}

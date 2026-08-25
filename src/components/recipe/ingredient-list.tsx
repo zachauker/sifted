@@ -75,7 +75,13 @@ export function IngredientList({ ingredients }: { ingredients: readonly DetailIn
           <ul aria-label={group.section ?? 'Ingredients'} className="space-y-1">
             {group.items.map((item) => (
               <li key={item.position}>
-                <label className="flex cursor-pointer items-baseline gap-2 py-0.5 text-sm leading-snug">
+                {/* The most-tapped element in the product, standing at a
+                    counter with wet or floury hands — `min-h-11` and
+                    `py-2` bring the whole row to a full 44px tap target
+                    even for a one-word ingredient, while `items-start`
+                    keeps the checkbox aligned to the first line of a
+                    line that wraps to two or three. */}
+                <label className="flex min-h-11 cursor-pointer items-start gap-2 py-2 text-sm leading-snug">
                   <input
                     type="checkbox"
                     className="peer mt-0.5 h-4 w-4 shrink-0 self-start accent-neutral-700 dark:accent-neutral-300"
