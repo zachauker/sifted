@@ -182,7 +182,22 @@ npx tsx --env-file-if-exists=.env.local scripts/notion-capture.ts
 
 Expected: `rows: 156`, `markdown links: 59`, `no link: 4`. **If the row count is not 156, stop and report rather than proceeding** — either the filter is wrong or the source data changed since this plan was written.
 
-Capturing the body of a **no-link** recipe is deliberate: that is one of the four rows whose Notion body is the only copy that exists, so it is the exact input Task 3 must handle.
+**Fixtures are already committed**, captured from the live database while this
+plan was written, so Tasks 2 and 3 can be built and tested before a token
+exists:
+
+- `tests/notion/fixtures/rows.json` — a markdown-wrapped link, a no-link row
+  (Ham Pot Pie), a fully populated row, and the one **titleless** row in the
+  library (a blank page created by accident, which must not crash the run).
+- `tests/notion/fixtures/body-structured.json` — Tamale Pie: headings,
+  sub-sections, and a source URL in the body despite an empty `Link` property.
+- `tests/notion/fixtures/body-unstructured.json` — Ham Pot Pie: a hand-typed
+  family recipe with no headings, no instructions, and no copy anywhere else.
+
+This step re-captures them from the live database to confirm the client agrees
+with what is committed. If a fixture differs materially, prefer the fresh
+capture and update the tests — but say so, because the committed ones were taken
+from the real database and the tests were written against them.
 
 These fixtures are the test inputs for Tasks 2 and 3. Commit them. Report the row count you observed — if it is not 156, stop and say so rather than proceeding.
 
@@ -349,148 +364,220 @@ git commit -m "feat: map Notion rows to migration inputs, unwrapping markdown li
 
 ---
 
-### Task 3: Turn a Notion page body into a recipe
+### Task 3: Recover a recipe from a Notion page body
 
-This is the recovery path for dead links, blocked publishers, and the four rows with no URL. It is not a rare fallback: `getpocket.com` is already confirmed dead, and seven years of saved links guarantees more.
+This is the recovery path for dead links, blocked publishers, and the rows with no
+URL. It is not a rare fallback: `getpocket.com` is already confirmed dead, and
+seven years of saved links guarantees more.
+
+**Two real bodies are committed as fixtures, and they are nothing alike.** The
+design follows from that, so read both before writing code.
+
+`tests/notion/fixtures/body-structured.json` (Cast-Iron Green Chile Tamale Pie)
+is cleanly structured — `## Ingredients` with `### For the filling` and
+`### For the cornbread topping` sub-headings, then `## Preparation` with its own
+sub-headings. Those sub-headings map directly onto the `section` field on
+ingredients and steps. **It also carries its source URL as a markdown link in the
+first line of the body, even though the row's `Link` property is empty.**
+
+`tests/notion/fixtures/body-unstructured.json` (Ham Pot Pie) has no headings at
+all. It is a hand-typed family recipe: bare lines, a bolded `**Dough**` acting as
+a section break, several lines with no quantity ("Ham", "Garlic"), and **no
+instructions whatsoever**. It is rated 5 and Made It, and its Notion body is the
+only copy of it that exists anywhere.
+
+A heading-driven parser handles the first and returns null for the second —
+silently dropping a five-star family recipe. So this module mirrors the
+extraction chain's own philosophy: **deterministic parse first, LLM second.**
 
 **Files:** Create `src/lib/notion/body.ts`. Test: `tests/notion/body.test.ts`.
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the failing tests**
 
-Create `tests/notion/body.test.ts`:
+Create `tests/notion/body.test.ts`. Use the two committed fixtures as the
+primary cases — they are real data, and inline samples are a supplement, not a
+substitute.
 
 ```ts
-import { describe, it, expect } from 'vitest'
-import { fromNotionBody } from '@/lib/notion/body'
+import { describe, it, expect, vi } from 'vitest'
+import { findSourceUrlInBody, fromNotionBody } from '@/lib/notion/body'
 import type { NotionRecipeRow, NotionRecipeBody } from '@/lib/notion/types'
+import type { LlmClient } from '@/lib/extract/llm-types'
+import structured from './fixtures/body-structured.json'
+import unstructured from './fixtures/body-unstructured.json'
 
-const row: NotionRecipeRow = {
-  pageId: 'p1', title: 'Homemade Flatbread', link: null,
-  publisher: 'Easy Weeknight Recipes', author: 'Katerina',
-  rating: 5, cookingStatus: 'Made It', tags: ['Bread'],
-  createdTime: '2022-03-02 22:09:26Z',
+const row = (over: Partial<NotionRecipeRow> = {}): NotionRecipeRow => ({
+  pageId: 'p1', title: 'Ham Pot Pie', link: null, publisher: 'Homemade',
+  author: null, rating: 5, cookingStatus: 'Made It', tags: ['Dinner'],
+  createdTime: '2022-01-30 00:02:00Z', ...over,
+})
+
+const noLlm: LlmClient = {
+  enrich: vi.fn().mockResolvedValue(null),
+  extractRecipe: vi.fn().mockResolvedValue(null),
 }
 
-const body = (markdown: string): NotionRecipeBody => ({ pageId: 'p1', markdown })
-
-const FULL = body(`![](https://example.com/flatbread.jpg)
-
-Flatbread is serious comfort food for this Macedonian girl. Carbs, carbs, carbs.
-I make my own because it is quick, and easier than most breads.
-
-## Ingredients
-
-- 1¼ cups lukewarm water
-- ¾ cups plain yogurt
-- 3¾ cups all-purpose flour
-
-## Instructions
-
-1. Whisk together the water, yeast, and sugar. Rest 8 to 10 minutes.
-2. Add the flour and parsley. Stir until the dough comes together.
-3. Knead for 4 minutes on a floured surface.
-`)
-
-describe('fromNotionBody', () => {
-  it('extracts ingredients and steps in document order', () => {
-    const r = fromNotionBody(row, FULL)!
-    expect(r.ingredients.map((i) => i.rawText)).toEqual([
-      '1¼ cups lukewarm water', '¾ cups plain yogurt', '3¾ cups all-purpose flour',
-    ])
-    expect(r.steps.map((s) => s.text)).toEqual([
-      'Whisk together the water, yeast, and sugar. Rest 8 to 10 minutes.',
-      'Add the flour and parsley. Stir until the dough comes together.',
-      'Knead for 4 minutes on a floured surface.',
-    ])
+describe('findSourceUrlInBody', () => {
+  it('finds a source url that the Link property was missing', () => {
+    expect(findSourceUrlInBody(structured as NotionRecipeBody))
+      .toBe('https://www.finecooking.com/recipe/cast-iron-green-chile-tamale-pie')
   })
 
-  it('never parses quantities — that is enrichment\'s job', () => {
-    const [first] = fromNotionBody(row, FULL)!.ingredients
-    expect(first).toEqual({
-      position: 0, section: null, rawText: '1¼ cups lukewarm water',
-      quantity: null, unit: null, item: null, note: null,
-    })
+  it('returns null when the body has no link', () => {
+    expect(findSourceUrlInBody(unstructured as NotionRecipeBody)).toBeNull()
   })
 
-  it('marks the extraction method as notion', () => {
-    expect(fromNotionBody(row, FULL)!.extractionMethod).toBe('notion')
+  it('ignores links that appear inside an ingredient line', () => {
+    const body = { pageId: 'p', markdown: '## Ingredients\n- 1 cup [salsa](https://x.com/salsa)\n' }
+    expect(findSourceUrlInBody(body)).toBeNull()
+  })
+})
+
+describe('fromNotionBody — structured body', () => {
+  it('parses headings without needing the model', async () => {
+    const r = (await fromNotionBody(row({ title: 'Tamale Pie' }), structured as NotionRecipeBody, noLlm))!
+    expect(r.extractionMethod).toBe('notion')
+    expect(noLlm.extractRecipe).not.toHaveBeenCalled()
+    expect(r.ingredients).toHaveLength(21)
+    expect(r.ingredients[0].rawText).toBe('1 lb. 85% lean ground beef')
+    expect(r.steps).toHaveLength(5)
   })
 
-  it('takes the title and publisher from the row, not from guessing at the body', () => {
-    const r = fromNotionBody(row, FULL)!
-    expect(r.title).toBe('Homemade Flatbread')
-    expect(r.publisher).toBe('Easy Weeknight Recipes')
-    expect(r.author).toBe('Katerina')
+  it('carries sub-headings through as ingredient and step sections', async () => {
+    const r = (await fromNotionBody(row({ title: 'Tamale Pie' }), structured as NotionRecipeBody, noLlm))!
+    expect(r.ingredients[0].section).toBe('For the filling')
+    expect(r.ingredients.at(-1)!.section).toBe('For the cornbread topping')
+    expect(r.steps[0].section).toBe('Make the filling')
   })
 
-  it('takes the first image as the hero', () => {
-    expect(fromNotionBody(row, FULL)!.heroImageUrl).toBe('https://example.com/flatbread.jpg')
+  it('keeps the prose above the recipe as the narrative', async () => {
+    const r = (await fromNotionBody(row({ title: 'Tamale Pie' }), structured as NotionRecipeBody, noLlm))!
+    expect(r.narrativeHtml).toContain('Tamale pie owes its name')
+    expect(r.narrativeHtml).not.toContain('lean ground beef')
   })
 
-  it('keeps prose that is neither ingredients nor steps as the narrative', () => {
-    const r = fromNotionBody(row, FULL)!
-    expect(r.narrativeHtml).toContain('Macedonian girl')
-    expect(r.narrativeHtml).not.toContain('3¾ cups all-purpose flour')
+  it('takes the hero image from the body', async () => {
+    const r = (await fromNotionBody(row({ title: 'Tamale Pie' }), structured as NotionRecipeBody, noLlm))!
+    expect(r.heroImageUrl).toContain('tamale-beef-pie')
+  })
+})
+
+describe('fromNotionBody — unstructured body', () => {
+  it('falls back to the model when there are no headings', async () => {
+    const llm: LlmClient = {
+      enrich: vi.fn(),
+      extractRecipe: vi.fn().mockResolvedValue({
+        title: 'Ham Pot Pie', description: null, author: null,
+        claimedTimeMinutes: null, servings: null, yieldText: null,
+        ingredients: ['Ham', '1 lb potatoes', '4 cups flour'],
+        steps: [],
+      }),
+    }
+    const r = (await fromNotionBody(row(), unstructured as NotionRecipeBody, llm))!
+
+    expect(llm.extractRecipe).toHaveBeenCalledOnce()
+    expect(r.ingredients.map((i) => i.rawText)).toEqual(['Ham', '1 lb potatoes', '4 cups flour'])
+    expect(r.extractionMethod).toBe('notion')
   })
 
-  it('recognizes alternate heading wording', () => {
-    const r = fromNotionBody(row, body(`### What You Need\n\n- 2 eggs\n\n### Directions\n\n1. Boil them.\n`))!
-    expect(r.ingredients).toHaveLength(1)
-    expect(r.steps).toHaveLength(1)
+  it('salvages the lines as ingredients when the model is unavailable', async () => {
+    // A five-star family recipe that exists nowhere else must not be lost
+    // because the model was down. Bare lines become verbatim ingredients.
+    const r = (await fromNotionBody(row(), unstructured as NotionRecipeBody, noLlm))!
+    expect(r.ingredients.map((i) => i.rawText)).toContain('1 lb potatoes')
+    expect(r.ingredients.map((i) => i.rawText)).toContain('4 cups flour')
+    expect(r.steps).toEqual([])
   })
 
-  it('returns null when there is no recipe in the body', () => {
-    expect(fromNotionBody(row, body('Just a story about bread, with no recipe.\n'))).toBeNull()
+  it('treats a bolded line as a section break', async () => {
+    const r = (await fromNotionBody(row(), unstructured as NotionRecipeBody, noLlm))!
+    const flour = r.ingredients.find((i) => i.rawText === '4 cups flour')!
+    expect(flour.section).toBe('Dough')
+  })
+})
+
+describe('fromNotionBody — shared behavior', () => {
+  it('never parses quantities; that is enrichment\'s job', async () => {
+    const r = (await fromNotionBody(row(), unstructured as NotionRecipeBody, noLlm))!
+    for (const i of r.ingredients) {
+      expect(i.quantity).toBeNull()
+      expect(i.unit).toBeNull()
+      expect(i.item).toBeNull()
+    }
   })
 
-  it('returns null for an empty body', () => {
-    expect(fromNotionBody(row, body(''))).toBeNull()
+  it('takes the title and publisher from the row, not from the body', async () => {
+    const r = (await fromNotionBody(row(), unstructured as NotionRecipeBody, noLlm))!
+    expect(r.title).toBe('Ham Pot Pie')
+    expect(r.publisher).toBe('Homemade')
   })
 
-  it('accepts a body with ingredients but no steps', () => {
-    const r = fromNotionBody(row, body('## Ingredients\n\n- 1 tsp salt\n- 1 tsp pepper\n'))
-    expect(r).not.toBeNull()
-    expect(r!.ingredients).toHaveLength(2)
-    expect(r!.steps).toEqual([])
+  it('returns null for an empty body', async () => {
+    expect(await fromNotionBody(row(), { pageId: 'p', markdown: '' }, noLlm)).toBeNull()
   })
 
-  it('converts the committed real fixture', async () => {
-    const fixture = (await import('./fixtures/body.json')).default as NotionRecipeBody
-    const r = fromNotionBody(row, fixture)
-    // Assert against what the real page actually contains — fill these in from
-    // the fixture captured in Task 1 rather than guessing.
-    expect(r).not.toBeNull()
-    expect(r!.ingredients.length).toBeGreaterThan(2)
+  it('returns null for a body with only prose and no recipe', async () => {
+    const body = { pageId: 'p', markdown: 'We should try making this sometime.\n' }
+    expect(await fromNotionBody(row(), body, noLlm)).toBeNull()
+  })
+
+  it('returns null for a titleless row with an empty body', async () => {
+    // The library contains exactly one of these — a blank page created by
+    // accident. It must be reported as unrecoverable, not crash the migration.
+    const r = await fromNotionBody(row({ title: null as never }), { pageId: 'p', markdown: '' }, noLlm)
+    expect(r).toBeNull()
   })
 })
 ```
 
-**On the last test:** the fixture is captured in Task 1, so its exact contents are unknown while this plan is written. Tighten that assertion to the real ingredient count and first ingredient text once you have the file — a `toBeGreaterThan(2)` is a placeholder for a real number, and leaving it loose wastes the only test that proves this works on genuine Notion output.
+- [ ] **Step 2: Run and confirm they fail**
 
-- [ ] **Step 2: Run it, confirm it fails**
+Run: `npx vitest run tests/notion/body`
+Expected: FAIL — unresolved import.
 
 - [ ] **Step 3: Implement**
 
 Create `src/lib/notion/body.ts`:
 
 ```ts
-export function fromNotionBody(
+export function findSourceUrlInBody(body: NotionRecipeBody): string | null
+
+export async function fromNotionBody(
   row: NotionRecipeRow,
   body: NotionRecipeBody,
-): ExtractedRecipe | null
+  llm: LlmClient,
+): Promise<ExtractedRecipe | null>
 ```
 
-Section detection is heading-driven: walk the markdown, track the current section, and classify list items by which section they fall under. Recognize ingredient headings (`ingredients`, `what you need`, `you'll need`) and instruction headings (`instructions`, `directions`, `method`, `steps`, `how to make`) case-insensitively.
+Order of strategies, mirroring `src/lib/extract/index.ts`:
 
-Return null when there are no ingredients **and** no steps — matching `upsertRecipe`'s notion of a usable recipe, and the same OR rule the extraction chain uses.
+1. **Headings.** If the body has an ingredients heading (`ingredients`, `what you
+   need`, `you'll need`) or an instructions heading (`instructions`,
+   `preparation`, `directions`, `method`, `steps`, `how to make`), parse
+   structurally. Sub-headings beneath them become `section`. List items and plain
+   lines under a section both count.
+2. **The model.** Otherwise hand the body markdown to `llm.extractRecipe` and
+   validate with `llmRecipeSchema`, exactly as `extract()` does.
+3. **Salvage.** If the model is unavailable or returns nothing usable, take every
+   non-image, non-narrative line as a verbatim ingredient, with bolded lines
+   (`**Dough**`) as section breaks. This is the floor, and it exists because
+   losing a hand-typed family recipe to a model outage is unacceptable.
 
-**Never parse quantities here.** The Notion body is a lossy copy already; the verbatim line is the last thing standing between a bad parse and lost data.
+Return null only when all three yield no ingredients **and** no steps.
+
+`findSourceUrlInBody` looks for a standalone markdown link on its own line near
+the top — not one embedded in an ingredient. That is worth having because the
+Tamale Pie row has an empty `Link` property while its body carries the URL, so a
+row that looks unrecoverable may be importable after all.
+
+**Never parse quantities here.** The Notion body is already a lossy copy; the
+verbatim line is the last thing between a bad parse and lost data.
 
 - [ ] **Step 4: Run and commit**
 
 ```bash
 git add src/lib/notion/body.ts tests/notion/body.test.ts
-git commit -m "feat: recover recipes from Notion page bodies when the source is gone"
+git commit -m "feat: recover recipes from Notion page bodies, structured or not"
 ```
 
 ---
