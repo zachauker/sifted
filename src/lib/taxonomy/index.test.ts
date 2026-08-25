@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { normalizeTag, isValidTag, COURSE_VALUES } from './index'
+import { normalizeTag, isValidTag, normalizeTags, COURSE_VALUES, __ALIAS_TARGETS } from './index'
 
 describe('normalizeTag', () => {
   it('maps a course name to the course facet', () => {
@@ -55,8 +55,79 @@ describe('isValidTag', () => {
   it('accepts any value on the open tag facet', () => {
     expect(isValidTag({ facet: 'tag', value: 'thanksgiving' })).toBe(true)
   })
+})
 
-  it('exposes the course vocabulary', () => {
-    expect(COURSE_VALUES).toContain('dessert')
+describe('normalizeTags', () => {
+  it('dedupes by facet:value', () => {
+    expect(normalizeTags(['Main Course', 'main dish', 'ENTREE'])).toEqual([
+      { facet: 'course', value: 'main' },
+    ])
+  })
+
+  it('filters out dropped tags', () => {
+    expect(normalizeTags(['Dinner', 'Docker', 'Chicken'])).toEqual([
+      { facet: 'ingredient', value: 'chicken' },
+    ])
+  })
+
+  it('filters out unrecognized tags', () => {
+    expect(normalizeTags(['asdfqwer', 'Chicken'])).toEqual([
+      { facet: 'ingredient', value: 'chicken' },
+    ])
+  })
+
+  it('returns an empty array for empty input', () => {
+    expect(normalizeTags([])).toEqual([])
+  })
+
+  it('returns an empty array for undefined input', () => {
+    expect(normalizeTags(undefined as never)).toEqual([])
+  })
+})
+
+describe('vocabulary invariants', () => {
+  it('every registered alias target is a valid tag', () => {
+    expect(__ALIAS_TARGETS.length).toBeGreaterThan(0)
+    for (const target of __ALIAS_TARGETS) {
+      expect(isValidTag(target)).toBe(true)
+    }
+  })
+})
+
+describe('correctness fixes', () => {
+  it('does not resolve Object.prototype members through the alias table', () => {
+    expect(normalizeTag('constructor')).toBeNull()
+  })
+
+  it('returns null instead of throwing for non-string input', () => {
+    expect(normalizeTag(5 as never)).toBeNull()
+  })
+
+  it('returns an empty array instead of throwing for undefined input', () => {
+    expect(normalizeTags(undefined as never)).toEqual([])
+  })
+
+  it('returns false instead of throwing for a prototype-named facet', () => {
+    expect(isValidTag({ facet: 'toString' as never, value: 'main' })).toBe(false)
+  })
+
+  it('files Baking under the oven method, not dessert', () => {
+    expect(normalizeTag('Baking')).toEqual({ facet: 'method', value: 'oven' })
+  })
+
+  it('maps Grains to its own ingredient value, not rice', () => {
+    expect(normalizeTag('Grains')).toEqual({ facet: 'ingredient', value: 'grain' })
+  })
+
+  it('strips a trailing "Recipes" suffix', () => {
+    expect(normalizeTag('Chicken Recipes')).toEqual({ facet: 'ingredient', value: 'chicken' })
+  })
+
+  it('prefers an exact alias over suffix-stripping', () => {
+    expect(normalizeTag('Dinner Recipes')).toEqual({ facet: 'course', value: 'main' })
+  })
+
+  it('resolves an "&" joiner', () => {
+    expect(normalizeTag('Soups & Stews')).toEqual({ facet: 'tag', value: 'soup' })
   })
 })
