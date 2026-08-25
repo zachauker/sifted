@@ -51,6 +51,7 @@ import { findSourceUrlInBody, fromNotionBody } from '../src/lib/notion/body'
 import { createNotionClient, fetchPageBody, fetchRecipeRows } from '../src/lib/notion/client'
 import { mapNotionRow, type MigrationInput } from '../src/lib/notion/map'
 import type { NotionRecipeBody, NotionRecipeRow } from '../src/lib/notion/types'
+import type { BlobStore } from '../src/lib/storage'
 import { normalizeSourceUrl } from '../src/lib/url'
 
 /* -------------------------------------------------------------------------- */
@@ -635,7 +636,10 @@ export type DryRunRow = {
   publisher: string
   klass: DryRunClass
   fetchOutcome: FetchOutcome | null
+  /** The URL the real run will actually import, body-recovered or not. */
   url: string | null
+  /** The URL the row's own `Link` property gave, so the report can show both. */
+  rowUrl: string | null
   urlFromBody: boolean
   detail: string
   modelCalls: number
@@ -698,6 +702,42 @@ export function looksLikeLostIngredient(line: string): boolean {
   return QUANTITY_HINT.test(line) || UNIT_HINT.test(line)
 }
 
+/** Whether a fetch outcome means the real run gets its recipe from the web. */
+function isReachable(outcome: FetchOutcome | null): boolean {
+  return outcome === 'structured' || outcome === 'unstructured'
+}
+
+/** Reads a URL the way the real run's import would, and says what it found. */
+async function probeUrl(
+  url: string,
+  deps: DryRunDeps,
+  llm: LlmClient,
+): Promise<{ fetchOutcome: FetchOutcome; detail: string }> {
+  try {
+    const page = await deps.fetchPage(url)
+    const extracted = await extract({ url: page.finalUrl || url, html: page.html, llm })
+    return {
+      fetchOutcome: 'structured',
+      detail: `${extracted.extractionMethod}, ${extracted.ingredients.length} ingredients, ${extracted.steps.length} steps`,
+    }
+  } catch (error) {
+    if (error instanceof NoRecipeFoundError) {
+      return {
+        fetchOutcome: 'unstructured',
+        detail: 'reachable, but no JSON-LD or microdata — the real run spends a model call here',
+      }
+    }
+    if (error instanceof BlockedError) return { fetchOutcome: 'blocked', detail: `HTTP ${error.status}` }
+    if (error instanceof FetchFailedError) return { fetchOutcome: 'fetch-failed', detail: error.reason }
+    // Reachable, but extraction itself broke. The real run would record this as
+    // an `internal` failure, which needs a human either way.
+    return {
+      fetchOutcome: 'unstructured',
+      detail: `reachable, but extraction threw — ${errorText(error)}`,
+    }
+  }
+}
+
 export async function classifyOneRow(
   row: NotionRecipeRow,
   input: MigrationInput,
@@ -705,7 +745,8 @@ export async function classifyOneRow(
 ): Promise<DryRunRow> {
   const counter = createCountingNoopLlm()
 
-  let url = input.sourceUrl
+  const rowUrl = input.sourceUrl
+  let url = rowUrl
   let urlFromBody = false
   let body: NotionRecipeBody | null = null
   let detail = ''
@@ -729,31 +770,45 @@ export async function classifyOneRow(
   let fetchOutcome: FetchOutcome | null = null
 
   if (url) {
-    try {
-      const page = await deps.fetchPage(url)
-      const extracted = await extract({ url: page.finalUrl || url, html: page.html, llm: counter.llm })
-      fetchOutcome = 'structured'
-      detail = `${extracted.extractionMethod}, ${extracted.ingredients.length} ingredients, ${extracted.steps.length} steps`
-    } catch (error) {
-      if (error instanceof NoRecipeFoundError) {
-        fetchOutcome = 'unstructured'
-        detail = 'reachable, but no JSON-LD or microdata — the real run spends a model call here'
-      } else if (error instanceof BlockedError) {
-        fetchOutcome = 'blocked'
-        detail = `HTTP ${error.status}`
-      } else if (error instanceof FetchFailedError) {
-        fetchOutcome = 'fetch-failed'
-        detail = error.reason
+    const probed = await probeUrl(url, deps, counter.llm)
+    fetchOutcome = probed.fetchOutcome
+    detail = probed.detail
+  }
+
+  // The real runner consults the page body for a source URL on *every* failure
+  // path, not only when the row had no link to begin with — a blocked or dead
+  // link falls through to the body path, which tries a body URL before it
+  // salvages anything. The dry run used to consult the body only for a row with
+  // no link at all, so a row this report called `notion-body-only` could in
+  // fact be imported from a body URL, off a page nobody had looked at. The
+  // report is the checkpoint an operator is told to read before spending money;
+  // it has to describe the run that will actually happen.
+  if (url && !isReachable(fetchOutcome)) {
+    body ??= await deps.fetchBody(row.pageId)
+    const found = findSourceUrlInBody(body)
+    let recovered: string | null = null
+    if (found) {
+      try {
+        recovered = normalizeSourceUrl(found).url
+      } catch {
+        recovered = null
+      }
+    }
+
+    if (recovered && recovered !== url) {
+      const retry = await probeUrl(recovered, deps, counter.llm)
+      if (isReachable(retry.fetchOutcome)) {
+        detail = `${detail}; the page body names ${recovered}, which works — ${retry.detail}`
+        url = recovered
+        urlFromBody = true
+        fetchOutcome = retry.fetchOutcome
       } else {
-        // Reachable, but extraction itself broke. The real run would record
-        // this as an `internal` failure, which needs a human either way.
-        fetchOutcome = 'unstructured'
-        detail = `reachable, but extraction threw — ${errorText(error)}`
+        detail = `${detail}; the page body names ${recovered}, which is no better — ${retry.detail}`
       }
     }
   }
 
-  const reachable = fetchOutcome === 'structured' || fetchOutcome === 'unstructured'
+  const reachable = isReachable(fetchOutcome)
 
   let bodyRecipe: ExtractedRecipe | null = null
   if (!reachable) {
@@ -788,6 +843,7 @@ export async function classifyOneRow(
     klass,
     fetchOutcome,
     url,
+    rowUrl,
     urlFromBody,
     detail,
     modelCalls,
@@ -841,14 +897,16 @@ export function renderReport(rows: DryRunRow[], meta: { generatedAt: string; ela
     '| 2 | no URL anywhere, Notion body yields nothing | `unrecoverable` |',
     '| 3 | URL fetched, JSON-LD or microdata found | `structured` |',
     '| 4 | URL fetched, no structured data | `needs-llm` |',
-    '| 5 | URL unreachable, Notion body yields a recipe | `notion-body-only` |',
+    '| 5 | URL unreachable (and any URL in the body is too), body yields a recipe | `notion-body-only` |',
     '| 6 | URL refused (403/429), no usable body | `blocked` |',
     '| 7 | URL fetch failed, no usable body | `dead` |',
     '',
     '`structured`, `needs-llm`, `notion-body-only` and `no-link` end with a recipe in the',
     'library. `blocked`, `dead` and `unrecoverable` end with a human.',
     '"No URL anywhere" means the `Link` property was empty **and** `findSourceUrlInBody`',
-    'found nothing in the page body.',
+    'found nothing in the page body. "URL unreachable" means the same thing the real run',
+    "means by it: the row's own link failed *and* any link the page body named failed too",
+    '— see "Rows importing from a URL found in the page body" below.',
     '',
     '## Totals',
     '',
@@ -868,7 +926,7 @@ export function renderReport(rows: DryRunRow[], meta: { generatedAt: string; ela
     `- refused (403/429): ${fetchTally.blocked}`,
     `- fetch failed: ${fetchTally.failed}`,
     `- no URL at all: ${fetchTally.noUrl}`,
-    `- URL recovered from the page body (empty \`Link\` property): ${fetchTally.urlFromBody}`,
+    `- URL recovered from the page body: ${fetchTally.urlFromBody}`,
     '',
     '## Estimated model calls for the real run',
     '',
@@ -909,6 +967,39 @@ export function renderReport(rows: DryRunRow[], meta: { generatedAt: string; ela
     push(`| ${publisher} | ${list.length} | ${cells.join(' | ')} |`)
   }
   push('')
+
+  // -- Rows whose source URL did not come from the row -----------------------
+  //
+  // Separated out because these are the rows most likely to be quietly wrong
+  // and least likely to look it: every one of them will be reported as a plain
+  // import. `findSourceUrlInBody` takes the first whole-line link above the
+  // first heading, and on a Notion clip that can be a "Jump to Recipe" anchor,
+  // a photo credit, or the publisher's homepage rather than the article. When
+  // it is, the recipe stored carries another page's title and ingredients while
+  // wearing this row's rating, status and original date.
+  const fromBody = rows.filter((r) => r.urlFromBody)
+  push(
+    '## Rows importing from a URL found in the page body',
+    '',
+    `${fromBody.length} rows. The real run consults the page body for a source URL whenever the`,
+    "row's own `Link` is empty **or** unreachable, and imports what it finds. That is",
+    'usually the right answer — it rescues rows that would otherwise be a clipped copy —',
+    'but `findSourceUrlInBody` takes the first whole-line link above the first heading,',
+    'which on a Notion clip may be a "Jump to Recipe" anchor, a photo credit, or the',
+    "publisher's homepage. Where it is, the recipe imported is a different recipe wearing",
+    "this row's rating, status and original save date. Check each of these by eye.",
+    '',
+  )
+  if (fromBody.length === 0) {
+    push('_None._', '')
+  } else {
+    for (const row of fromBody) {
+      push(`- **${row.title}** — ${row.publisher} (\`${row.klass}\`)`)
+      push(`  - row link: ${row.rowUrl ? `\`${row.rowUrl}\`` : '_empty_'}`)
+      push(`  - will import: \`${row.url}\``)
+    }
+    push('')
+  }
 
   // -- Everything not structured --------------------------------------------
   const notStructured = rows.filter((r) => r.klass !== 'structured')
@@ -1026,6 +1117,7 @@ async function runDryRun(opts: Options, notion: Client, rows: NotionRecipeRow[])
         klass: 'unrecoverable',
         fetchOutcome: null,
         url: input.sourceUrl,
+        rowUrl: input.sourceUrl,
         urlFromBody: false,
         detail: `could not be classified — ${errorText(error)}`,
         modelCalls: 0,
@@ -1069,7 +1161,22 @@ export type RowResult = {
   /** Which path produced it, for the summary. */
   via: 'import' | 'body-url' | 'notion-body' | null
   recipeId: string | null
+  /** The URL the recipe was actually stored against. */
   sourceUrl: string | null
+  /**
+   * The URL the row's own `Link` property gave, before the body was consulted.
+   *
+   * Recorded on every row, not only the interesting ones, so that a `via:
+   * 'body-url'` result carries *both* URLs — the one the operator would expect
+   * and the one the body supplied — into the summary and into the resume file.
+   * `findSourceUrlInBody` takes the first whole-line link above the first
+   * heading, which for a Notion clip is as likely to be a "Jump to Recipe"
+   * anchor, a photo credit, or the publisher's homepage as the article; the
+   * recipe then stored carries another page's title and ingredients wearing
+   * this row's rating, status and date. That is a handful of rows a human can
+   * check in a minute — but only if something tells them which rows.
+   */
+  rowSourceUrl: string | null
   reason: string | null
   at: string
 }
@@ -1275,6 +1382,9 @@ async function loadRuntime() {
     createJob: jobsModule.createJob,
     getJob: jobsModule.getJob,
     upsertRecipe: recipesModule.upsertRecipe,
+    // Read by the body path before it writes, to refuse a downgrade. See
+    // `wouldRegressEnrichment`.
+    findBySourceUrl: recipesModule.findBySourceUrl,
     applyNotionMetadata: recipesModule.applyNotionMetadata,
     runImport: importModule.runImport,
     store: storeModule.createVercelBlobStore(),
@@ -1283,10 +1393,25 @@ async function loadRuntime() {
     schema: schemaModule,
     eq: drizzle.eq,
     and: drizzle.and,
+    // Part of the runtime rather than reached for directly, so `processRow`
+    // has exactly one seam and a test can drive the whole composition — every
+    // module in this repo wired together — with no network. This is the only
+    // function in the file that touches other people's servers on the real
+    // run, and it was the reason none of what follows had a test.
+    fetchPage,
   }
 }
 
-type Runtime = Awaited<ReturnType<typeof loadRuntime>>
+/**
+ * Everything the real run composes, in one object.
+ *
+ * Exported as a type so `tests/notion/migrate.test.ts` can assemble the same
+ * shape around `createTestDb()` with a fake model, a memory blob store and a
+ * fake network. `processRow`, `attemptImport`, `applyRowMetadata` and the body
+ * path are where every module in this repo actually meets, and until they were
+ * reachable from a test the only coverage here was of the pure helpers above.
+ */
+export type Runtime = Awaited<ReturnType<typeof loadRuntime>>
 
 /**
  * Whether the enrichment pass landed, judged the only way available: both
@@ -1313,7 +1438,7 @@ async function attemptImport(rt: Runtime, url: string, llm: LlmClient): Promise<
     llm,
     jobId,
     url,
-    fetchPage,
+    fetchPage: rt.fetchPage,
     ingestHeroImage: rt.ingestHeroImage,
   })
 
@@ -1367,17 +1492,120 @@ async function applyRowMetadata(
 }
 
 /**
- * Stores the hero image a Notion body pointed at.
- *
- * Worth the extra call because Notion's own file URLs are signed and expire in
- * about an hour: the moment the migration runs is the only moment those bytes
- * are reachable. Wrapped so it can never fail the row — a recipe without a
- * picture is a recipe.
+ * A hero image already downloaded and transcoded, waiting only for a recipe id
+ * to be written under.
  */
-async function ingestBodyHeroImage(rt: Runtime, recipeId: string, url: string): Promise<void> {
+type CapturedHeroImage = {
+  blobKey: string
+  thumbKey: string
+  width: number
+  height: number
+  writes: { key: string; data: Uint8Array; contentType: string }[]
+}
+
+/**
+ * The placeholder recipe id the capture below hands to `ingestHeroImage`, and
+ * then substitutes out of the keys it produced. A literal that cannot collide
+ * with a real cuid2 (which is lower-case alphanumeric, no hyphens).
+ */
+const HERO_CAPTURE_ID = 'pending-recipe-id'
+
+/**
+ * The markdown a Notion body writes a hero image as.
+ *
+ * A deliberate copy of `IMAGE_ONLY_RE` in `src/lib/notion/body.ts`, which is
+ * private to that module. Drift is harmless here and that is the point: this
+ * scan only decides how *early* the picture is captured, and anything it misses
+ * is still ingested from `recipe.heroImageUrl` after the write, exactly as
+ * before. It is not a second answer to "what is the hero image".
+ */
+const BODY_IMAGE_RE = /^!\[[^\]]*\]\(\s*([^)\s]+)[^)]*\)$/
+
+function findBodyHeroImageUrl(markdown: string): string | null {
+  for (const raw of markdown.split('\n')) {
+    const match = raw.trim().match(BODY_IMAGE_RE)
+    if (match) return match[1]
+  }
+  return null
+}
+
+/**
+ * Downloads and transcodes the hero image a Notion body points at, the instant
+ * the body arrives — before anything throttled runs.
+ *
+ * Notion's file URLs are signed with `X-Amz-Expires=300`. Five minutes, not the
+ * hour an earlier version of this comment claimed, and the difference decides
+ * whether this works. Between `fetchPageBody` and the recipe row landing sit a
+ * whole import attempt against a URL recovered from the body and up to two
+ * model calls, every one of them behind a throttle that can burn a
+ * 2/4/8/16/32-second backoff ladder. Five minutes is easy to lose there, and
+ * losing it costs the recipe its only picture with nothing anywhere to say so:
+ * the ingest returns null on any failure, on purpose, because a recipe without
+ * a picture is still a recipe.
+ *
+ * So the bytes are fetched and transcoded here, while the signature is
+ * certainly still good, and only the two `put`s are held back — `ingestHeroImage`
+ * keys its blobs by recipe id and there is no recipe yet. The capture store
+ * records what it was asked to write; `storeCapturedHeroImage` replays it under
+ * the real id once `upsertRecipe` has produced one, so the blobs still live
+ * under `recipes/<id>/` and nothing downstream can tell the difference.
+ *
+ * The cost is one wasted download on the rows where the body path does not end
+ * in a write after all (a recovered URL that imports cleanly, a body that holds
+ * no recipe). One image is a cheap price for the ones that do.
+ *
+ * Never throws: a picture must not fail a row.
+ */
+async function captureBodyHeroImage(rt: Runtime, url: string): Promise<CapturedHeroImage | null> {
+  const writes: CapturedHeroImage['writes'] = []
+  const captureStore: BlobStore = {
+    async put(key, data, contentType) {
+      // Copied, matching the real store, so a later mutation of the buffer
+      // cannot rewrite what we are holding.
+      const copy = data.slice()
+      writes.push({ key, data: copy, contentType })
+      return { key, url: `pending://${key}`, size: copy.byteLength }
+    },
+    async get() {
+      return null
+    },
+    async delete() {},
+  }
+
   try {
-    const image = await rt.ingestHeroImage({ url, recipeId, store: rt.store })
-    if (!image) return
+    const image = await rt.ingestHeroImage({ url, recipeId: HERO_CAPTURE_ID, store: captureStore })
+    if (!image) return null
+    return { ...image, writes }
+  } catch (error) {
+    log(`  hero image from the Notion body could not be fetched: ${errorText(error)}`)
+    return null
+  }
+}
+
+/**
+ * Writes a captured hero image out under the recipe that now exists.
+ *
+ * The placeholder substitution is a plain string replace over keys
+ * `ingestHeroImage` built itself. Should it ever stop embedding the recipe id
+ * in them the replace is a no-op — the blobs and the row still agree with each
+ * other, they just sit under a different prefix — so this cannot corrupt
+ * anything, only misfile it.
+ *
+ * Wrapped so it can never fail the row, for the same reason as the capture.
+ */
+async function storeCapturedHeroImage(
+  rt: Runtime,
+  recipeId: string,
+  captured: CapturedHeroImage,
+): Promise<void> {
+  const rekey = (key: string) => key.split(HERO_CAPTURE_ID).join(recipeId)
+  try {
+    for (const write of captured.writes) {
+      await rt.store.put(rekey(write.key), write.data, write.contentType)
+    }
+    // Replace rather than append, matching how `upsertRecipe` treats every
+    // other child table: a resumed run must not leave one `source_hero` row per
+    // attempt.
     await rt.db
       .delete(rt.schema.images)
       .where(
@@ -1389,26 +1617,70 @@ async function ingestBodyHeroImage(rt: Runtime, recipeId: string, url: string): 
     await rt.db.insert(rt.schema.images).values({
       recipeId,
       role: 'source_hero',
-      blobKey: image.blobKey,
-      thumbKey: image.thumbKey,
-      width: image.width,
-      height: image.height,
+      blobKey: rekey(captured.blobKey),
+      thumbKey: rekey(captured.thumbKey),
+      width: captured.width,
+      height: captured.height,
     })
   } catch (error) {
     log(`  hero image from the Notion body could not be stored: ${errorText(error)}`)
   }
 }
 
-async function processRow(
+/**
+ * Whether writing `recipe` over whatever already lives at `sourceUrl` would
+ * trade model-parsed data for nulls.
+ *
+ * This is `EnrichmentRegressionError`'s condition out of
+ * `src/lib/import/run-import.ts`, applied to the one path that never reaches
+ * it. `runImport` fetches *before* it dedupes, so when two Notion rows share a
+ * canonical URL and the second one is refused by the publisher, the 403 throws
+ * first, `decideAction` routes the row to `notion-body`, and the body path
+ * calls `upsertRecipe` directly — bypassing the guard built for exactly this.
+ * `upsertRecipe` finds the existing row by `sourceUrl` and updates it in place,
+ * and `upsertRecipe` replaces children wholesale: a clean, enriched import with
+ * parsed quantities and tags becomes a Notion clipping with `extractionMethod:
+ * notion`, `enrichmentApplied: false`, one raw ingredient line and no tags. On
+ * the same recipe id, with no error anywhere.
+ *
+ * The condition is deliberately the same one rather than a second, stricter
+ * rule of this file's own: two rules about when a recipe may be overwritten,
+ * living in two modules, is how one of them quietly stops matching the other.
+ * Like `EnrichmentRegressionError` it only fires when the stored recipe *has*
+ * enrichment — a first import that landed unenriched is not worth protecting
+ * from a better copy.
+ */
+async function wouldRegressEnrichment(
+  rt: Runtime,
+  sourceUrl: string | null,
+  applied: boolean,
+): Promise<boolean> {
+  if (!sourceUrl || applied) return false
+  const existing = await rt.findBySourceUrl(rt.db, sourceUrl)
+  return existing?.enrichmentApplied === true
+}
+
+/**
+ * One Notion row, end to end.
+ *
+ * Exported for `tests/notion/migrate.test.ts`. This function is the
+ * composition root of the migration — the Notion mapping, the import pipeline,
+ * the body salvage, enrichment, the recipe write, the metadata pass and the
+ * image ingest all meet here and nowhere else — and it had no test at all until
+ * the seams below existed. Every one of them (`rt.fetchPage`, `rt.runImport`,
+ * `llm`, `fetchBody`) is injected rather than reached for so the whole path
+ * runs against `createTestDb()` with no network, no model, and no blob store.
+ */
+export async function processRow(
   row: NotionRecipeRow,
   rt: Runtime,
-  notion: Client,
-  llm: LlmGate,
-  notionGate: <T>(fn: () => Promise<T>) => Promise<T>,
+  llm: LlmClient,
+  fetchBody: (pageId: string) => Promise<NotionRecipeBody>,
 ): Promise<RowResult> {
   const input = mapNotionRow(row)
   const title = row.title ?? '(untitled)'
   const now = () => new Date().toISOString()
+  const rowSourceUrl = input.sourceUrl
 
   let action = decideAction(input, null)
 
@@ -1423,6 +1695,7 @@ async function processRow(
         via: 'import',
         recipeId: attempt.recipeId,
         sourceUrl: input.sourceUrl,
+        rowSourceUrl,
         reason: null,
         at: now(),
       }
@@ -1438,13 +1711,20 @@ async function processRow(
       via: null,
       recipeId: null,
       sourceUrl: input.sourceUrl,
+      rowSourceUrl,
       reason: action.reason,
       at: now(),
     }
   }
 
   // -- The Notion body path --------------------------------------------------
-  const body = await notionGate(() => fetchPageBody(notion, row.pageId))
+  const body = await fetchBody(row.pageId)
+
+  // The picture first, and before anything throttled. The signature on a Notion
+  // file URL is good for five minutes; everything below this line can spend
+  // longer than that on backoff alone. See `captureBodyHeroImage`.
+  const bodyHeroUrl = findBodyHeroImageUrl(body.markdown ?? '')
+  const captured = bodyHeroUrl ? await captureBodyHeroImage(rt, bodyHeroUrl) : null
 
   // Before converting the body, check whether it names a source URL the `Link`
   // property was missing. The Tamale Pie row has exactly that: an empty `Link`
@@ -1472,7 +1752,17 @@ async function processRow(
         via: 'body-url',
         recipeId: attempt.recipeId,
         sourceUrl: recoveredUrl,
-        reason: 'source URL recovered from the Notion page body',
+        rowSourceUrl,
+        // Said out loud, and the summary prints it even though the outcome is a
+        // plain success: `findSourceUrlInBody` returns the first whole-line
+        // link above the first heading, which on a Notion clip can just as
+        // easily be a "Jump to Recipe" anchor or a photo credit as the article.
+        // When it is, this row now holds a different recipe's title and
+        // ingredients wearing this row's rating, status and original date, and
+        // nothing else in the run would ever mention it.
+        reason:
+          `source URL recovered from the Notion page body — imported ${recoveredUrl} ` +
+          `instead of ${rowSourceUrl ?? 'no link on the row'}; CHECK that this is the same recipe`,
         at: now(),
       }
     }
@@ -1485,6 +1775,7 @@ async function processRow(
         via: null,
         recipeId: null,
         sourceUrl: recoveredUrl,
+        rowSourceUrl,
         reason: `${next.reason} (URL recovered from the page body)`,
         at: now(),
       }
@@ -1500,6 +1791,7 @@ async function processRow(
       via: null,
       recipeId: null,
       sourceUrl: input.sourceUrl,
+      rowSourceUrl,
       reason: 'the source URL is unusable and the Notion page body holds no recipe',
       at: now(),
     }
@@ -1519,16 +1811,53 @@ async function processRow(
   // of inserting a second copy.
   const sourceUrl = recoveredUrl ?? input.sourceUrl
   const sourceDomain = sourceUrl ? safeDomain(sourceUrl) : null
+  const applied = enrichmentApplied(recipe)
+
+  // Refuse to trade a good recipe for a lossy Notion copy of it.
+  //
+  // Two Notion rows can share a canonical URL. The first imports cleanly; the
+  // second is refused by the publisher, lands here, and `upsertRecipe` would
+  // find the first one's row by `sourceUrl` and overwrite it in place — same
+  // recipe id, ingredients replaced wholesale by the body's raw lines, tags
+  // gone. `runImport` has a guard for precisely this and this path never
+  // reaches it, because `runImport` fetches before it dedupes and the fetch is
+  // what failed. So the guard is applied here instead, on the same condition.
+  if (await wouldRegressEnrichment(rt, sourceUrl, applied)) {
+    return {
+      pageId: row.pageId,
+      title,
+      outcome: 'skipped',
+      via: null,
+      recipeId: null,
+      sourceUrl,
+      rowSourceUrl,
+      reason:
+        `the Notion body copy is not enriched and ${sourceUrl} already holds an enriched ` +
+        'recipe; the existing recipe was preserved and nothing was overwritten',
+      at: now(),
+    }
+  }
 
   const recipeId = await rt.upsertRecipe(rt.db, {
     extracted: recipe,
     sourceUrl,
     sourceDomain,
-    enrichmentApplied: enrichmentApplied(recipe),
+    enrichmentApplied: applied,
     createdAt: input.createdAt,
   })
 
-  if (recipe.heroImageUrl) await ingestBodyHeroImage(rt, recipeId, recipe.heroImageUrl)
+  // The picture was captured before any of the above ran; all that is left is
+  // to write it out under the id that now exists. `captured` is null when the
+  // body named no image, or when the download failed — both of which are
+  // survivable and neither of which fails the row.
+  if (captured) await storeCapturedHeroImage(rt, recipeId, captured)
+  // A hero the early scan did not recognise but `fromNotionBody` did. Rare
+  // enough to be worth the late, expiry-exposed attempt rather than nothing.
+  else if (recipe.heroImageUrl) {
+    const late = await captureBodyHeroImage(rt, recipe.heroImageUrl)
+    if (late) await storeCapturedHeroImage(rt, recipeId, late)
+  }
+
   await applyRowMetadata(rt, recipeId, input)
 
   return {
@@ -1538,8 +1867,9 @@ async function processRow(
     via: 'notion-body',
     recipeId,
     sourceUrl,
+    rowSourceUrl,
     reason: `recovered from the Notion body: ${recipe.ingredients.length} ingredients, ${recipe.steps.length} steps${
-      enrichmentApplied(recipe) ? '' : ' — NOT enriched'
+      applied ? '' : ' — NOT enriched'
     }`,
     at: now(),
   }
@@ -1585,7 +1915,9 @@ async function runMigration(
     async (row) => {
       let result: RowResult
       try {
-        result = await processRow(row, rt, notion, llm, notionGate)
+        result = await processRow(row, rt, llm, (pageId) =>
+          notionGate(() => fetchPageBody(notion, pageId)),
+        )
       } catch (error) {
         result = {
           pageId: row.pageId,
@@ -1594,6 +1926,7 @@ async function runMigration(
           via: null,
           recipeId: null,
           sourceUrl: null,
+          rowSourceUrl: null,
           reason: errorText(error),
           at: new Date().toISOString(),
         }
@@ -1604,7 +1937,11 @@ async function runMigration(
       done++
       log(
         `${String(done).padStart(3)}/${pending.length}  ${result.outcome.padEnd(15)} ${result.title}` +
-          (result.reason && result.outcome !== 'imported' ? `\n      ${result.reason}` : ''),
+          // A plain `imported` needs no explanation — except when the URL that
+          // was imported is not the row's own. That one always gets said.
+          (result.reason && (result.outcome !== 'imported' || result.via === 'body-url')
+            ? `\n      ${result.reason}`
+            : ''),
       )
 
       // The hard stop. Checked after the row rather than before, so the row in
@@ -1640,7 +1977,12 @@ async function runMigration(
   }
 }
 
-function printSummary(args: {
+/**
+ * The end-of-run report. Exported so a test can read what an operator is
+ * actually told — in particular that a row whose source URL was swapped for one
+ * found in the page body says so, out loud, with both URLs.
+ */
+export function printSummary(args: {
   results: RowResult[]
   rows: NotionRecipeRow[]
   alreadyDone: number
@@ -1668,6 +2010,27 @@ function printSummary(args: {
     console.log('')
     log(`${needsEyes.length} rows did not land:`)
     for (const row of needsEyes) log(`  ${row.outcome.padEnd(14)} ${row.title}\n      ${row.reason}`)
+  }
+
+  // Rows whose source was swapped. A success by every measure the runner has,
+  // and still the one outcome most likely to be wrong: `findSourceUrlInBody`
+  // takes the first whole-line link above the first heading, which on a Notion
+  // clip may be a "Jump to Recipe" anchor, a photo credit, or the publisher's
+  // homepage. Where it is, the recipe stored here carries another page's title
+  // and ingredients while wearing this row's rating, status and original date —
+  // and every number above it counts that as an import. It is a handful of rows
+  // and a minute of a human's time, but only if the run says which rows.
+  const bodyUrlImports = results.filter((r) => r.via === 'body-url')
+  if (bodyUrlImports.length > 0) {
+    console.log('')
+    log(`${bodyUrlImports.length} rows were imported from a URL found in the page body, not from`)
+    log('the row\'s own Link property. Open each one and check it is the same recipe:')
+    for (const row of bodyUrlImports) {
+      log(`  ${row.title}`)
+      log(`      row link:  ${row.rowSourceUrl ?? '(none — the Link property was empty)'}`)
+      log(`      imported:  ${row.sourceUrl}`)
+    }
+    log(`(also recorded in ${opts.resumePath}, so a re-run does not lose the list)`)
   }
 
   const unenriched = results.filter((r) => r.reason?.includes('NOT enriched'))

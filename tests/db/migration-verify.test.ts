@@ -206,3 +206,87 @@ describe('formatReport', () => {
     expect(text).toContain('no recipes in the database')
   })
 })
+
+/**
+ * The body-recovered recipes the migration actually produces keep their source
+ * URL. `processRow` stores the row's original URL on a body-recovered recipe on
+ * purpose — it is the recipe's true provenance, it is what a later repair pass
+ * would retry, and it is what makes that path idempotent — but that URL is
+ * exactly the one that was dead, blocked or wrong, which is why the body was
+ * used at all.
+ *
+ * The Ham Pot Pie above has `sourceUrl: null`, so the fixture set never saw
+ * this. `unenrichedWithSourceUrl` filtered on `sourceUrl !== null` alone, which
+ * meant every body-recovered recipe was reported as repairable by re-import,
+ * counted into the hard failures in `main`, and `npm run migrate:verify` exited
+ * 1 forever with nothing an operator could do to satisfy it.
+ */
+describe('unenriched recipes recovered from a Notion body', () => {
+  let bodyDb: TestDb
+
+  beforeAll(async () => {
+    bodyDb = await createTestDb()
+
+    // What the migration writes for a blocked publisher: the dead URL kept for
+    // provenance, `extractionMethod` 'notion', enrichment never applied.
+    await upsertRecipe(bodyDb, {
+      extracted: extracted({
+        title: 'Clipped Ham Pot Pie',
+        ingredients: [
+          { position: 0, section: null, rawText: 'Ham', quantity: null, unit: null, item: null, note: null },
+        ],
+        extractionMethod: 'notion',
+      }),
+      sourceUrl: 'https://getpocket.com/gone',
+      sourceDomain: 'getpocket.com',
+      enrichmentApplied: false,
+      createdAt: new Date('2020-03-01T00:00:00.000Z'),
+    })
+
+    // A genuinely repairable recipe, for contrast: imported from a live URL,
+    // enrichment lost to a rate limit.
+    await upsertRecipe(bodyDb, {
+      extracted: extracted({
+        title: 'Rate-Limited Casserole',
+        ingredients: [
+          { position: 0, section: null, rawText: '1 can soup', quantity: null, unit: null, item: null, note: null },
+        ],
+        extractionMethod: 'jsonld',
+      }),
+      sourceUrl: 'https://example.com/casserole',
+      sourceDomain: 'example.com',
+      enrichmentApplied: false,
+      createdAt: new Date('2021-06-15T12:00:00.000Z'),
+    })
+  })
+
+  it('does not call a body-recovered recipe repairable by re-import', async () => {
+    const report = await buildVerificationReport(bodyDb)
+    expect(report.unenriched).toBe(2)
+    expect(report.unenrichedWithSourceUrl.map((r) => r.title)).toEqual(['Rate-Limited Casserole'])
+  })
+
+  it('reports it separately instead, so the two populations stay distinct', async () => {
+    const report = await buildVerificationReport(bodyDb)
+    expect(report.unenrichedFromNotionBody.map((r) => r.title)).toEqual(['Clipped Ham Pot Pie'])
+
+    const text = formatReport(report)
+    expect(text).toContain('not repairable by re-import): 1')
+    expect(text).toContain('Clipped Ham Pot Pie')
+  })
+
+  it('leaves a library whose only unenriched recipes came from Notion bodies passable', async () => {
+    // The whole point: with nothing to repair, the repairable count is zero and
+    // the check can be satisfied. It never could be before.
+    const onlyBodies = await createTestDb()
+    await upsertRecipe(onlyBodies, {
+      extracted: extracted({ title: 'Grandma’s Biscuits', extractionMethod: 'notion' }),
+      sourceUrl: 'https://getpocket.com/also-gone',
+      sourceDomain: 'getpocket.com',
+      enrichmentApplied: false,
+    })
+    const report = await buildVerificationReport(onlyBodies)
+    expect(report.unenriched).toBe(1)
+    expect(report.unenrichedWithSourceUrl).toEqual([])
+  })
+})

@@ -13,13 +13,7 @@
  * real still requires.
  *
  * Usage:
- *   npx tsx --env-file-if-exists=.env.local scripts/migration-verify.ts
- *
- * (There is no npm script for it yet: `package.json` is owned by another
- * change while this was written. The intended entry, matching how `unenriched`
- * is declared there, is
- *   "migrate:verify": "tsx --env-file-if-exists=.env.local scripts/migration-verify.ts"
- * run as `npm run migrate:verify`.)
+ *   npm run migrate:verify
  *
  * The headline number is `zeroTags` cross-referenced with `unenriched`: a
  * rate-limited migration burst stores recipes that look fine — a title, a
@@ -77,8 +71,30 @@ export type VerificationReport = {
   zeroTags: number
   /** Recipes stored with `enrichment_applied = false`. */
   unenriched: number
-  /** Of the unenriched recipes, those that still have a source URL and so can be repaired by re-import. */
+  /**
+   * Of the unenriched recipes, those a re-import can actually repair: they have
+   * a source URL *and* they were built from it.
+   *
+   * Recipes recovered from a Notion page body are deliberately excluded, even
+   * though most of them do carry a source URL. The migration stores the row's
+   * original URL on a body-recovered recipe on purpose — it is the recipe's
+   * true provenance and it is what makes that path idempotent — but that URL is
+   * exactly the one that was dead, blocked or wrong, which is why the body was
+   * used at all. Counting those here made this a check that could never pass:
+   * every body-recovered recipe was reported as repairable, folded into the
+   * hard-failure test in `main`, and `npm run migrate:verify` exited 1 forever
+   * with nothing an operator could do about it. A report that cannot be
+   * satisfied stops being read.
+   */
   unenrichedWithSourceUrl: RecipeRef[]
+  /**
+   * Of the unenriched recipes, those recovered from a Notion page body.
+   *
+   * Genuinely unenriched and genuinely not repairable by re-import, so they are
+   * reported and not counted as failures. Conflating "needs repair" with
+   * "cannot be repaired" is what made the number above untrustworthy.
+   */
+  unenrichedFromNotionBody: RecipeRef[]
 
   facetDistribution: FacetCount[]
 
@@ -143,7 +159,10 @@ export async function buildVerificationReport(db: Db): Promise<VerificationRepor
 
   const unenrichedRecipes = allRecipes.filter((r) => !r.enrichmentApplied)
   const unenrichedWithSourceUrl = unenrichedRecipes
-    .filter((r) => r.sourceUrl !== null)
+    .filter((r) => r.sourceUrl !== null && r.extractionMethod !== 'notion')
+    .map((r) => ({ id: r.id, title: r.title }))
+  const unenrichedFromNotionBody = unenrichedRecipes
+    .filter((r) => r.extractionMethod === 'notion')
     .map((r) => ({ id: r.id, title: r.title }))
 
   const createdTimes = allRecipes.map((r) => r.createdAt.getTime())
@@ -161,6 +180,7 @@ export async function buildVerificationReport(db: Db): Promise<VerificationRepor
     zeroTags: allRecipes.filter((r) => (tagCountByRecipe.get(r.id) ?? 0) === 0).length,
     unenriched: unenrichedRecipes.length,
     unenrichedWithSourceUrl,
+    unenrichedFromNotionBody,
 
     facetDistribution,
 
@@ -222,8 +242,17 @@ export function formatReport(report: VerificationReport): string {
   ))
   if (!unenrichedOk) {
     for (const r of report.unenrichedWithSourceUrl) out.push(`    - ${r.title} (${r.id})`)
-    out.push('  Repair with: npx tsx --env-file-if-exists=.env.local scripts/list-unenriched.ts')
+    out.push('  Repair by re-importing each source URL. List them with: npm run unenriched')
   }
+  // Reported, never failed. These came out of a Notion page body precisely
+  // because their source URL was dead, blocked or absent, so re-importing that
+  // URL is not a repair — it is the thing that already did not work. They are
+  // listed so the two populations stay distinguishable: the line above is a
+  // to-do, this one is a fact about the library.
+  out.push(
+    `  unenriched recipes recovered from a Notion body (not repairable by re-import): ${report.unenrichedFromNotionBody.length}`,
+  )
+  for (const r of report.unenrichedFromNotionBody) out.push(`    - ${r.title} (${r.id})`)
   out.push('')
 
   // --- Coverage --------------------------------------------------------------

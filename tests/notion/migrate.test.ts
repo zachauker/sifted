@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
+import { and, eq } from 'drizzle-orm'
 import {
   backoffDelayMs,
   classifyOneRow,
@@ -12,15 +13,28 @@ import {
   narrativeParagraphs,
   parseArgs,
   parseResumeFile,
+  printSummary,
+  processRow,
   renderReport,
   type DryRunDeps,
   type DryRunRow,
   type RowResult,
+  type Runtime,
 } from '../../scripts/migrate-notion'
 import { mapNotionRow, type MigrationInput } from '@/lib/notion/map'
 import { BlockedError, FetchFailedError, type FetchedPage } from '@/lib/fetch'
 import type { NotionRecipeBody, NotionRecipeRow } from '@/lib/notion/types'
 import type { LlmClient } from '@/lib/extract/llm-types'
+import { createTestDb, type TestDb } from '../helpers/db'
+import { createMemoryStore } from '@/lib/storage/memory'
+import { createJob, getJob } from '@/lib/db/queries/jobs'
+import {
+  applyNotionMetadata,
+  findBySourceUrl,
+  upsertRecipe,
+} from '@/lib/db/queries/recipes'
+import { runImport } from '@/lib/import/run-import'
+import * as schema from '@/lib/db/schema'
 
 const anyEnrich = { title: 't', ingredientLines: [], rawTags: [] }
 import structuredBody from './fixtures/body-structured.json'
@@ -228,6 +242,7 @@ describe('isTerminal', () => {
     via: null,
     recipeId: null,
     sourceUrl: null,
+    rowSourceUrl: null,
     reason: null,
     at: '2026-08-25T00:00:00.000Z',
   })
@@ -427,6 +442,62 @@ describe('the dry run classifier', () => {
     expect(result.klass).toBe('structured')
   })
 
+  it('models the real run\u2019s retry: a dead link whose body names a live URL', async () => {
+    // The real runner consults the page body for a source URL on *every*
+    // failure path, not only when the row has no link. The dry run used to
+    // consult it only for a row with an empty `Link`, so a row this report
+    // called `notion-body-only` could in fact be imported from a body URL off a
+    // page nobody had looked at \u2014 and the report is the checkpoint an
+    // operator is told to read before spending anything.
+    const seen: string[] = []
+    const body: NotionRecipeBody = {
+      pageId: 'p1',
+      markdown: ['[Jump to Recipe](https://seriouseats.com/other)', '', '## Ingredients', '', '- cabbage'].join('\n'),
+    }
+
+    const result = await classify(notionRow({ title: 'Charred Cabbage' }), {
+      fetchBody: async () => body,
+      fetchPage: async (url) => {
+        seen.push(url)
+        if (url === 'https://seriouseats.com/other') return page(JSONLD_PAGE, url)
+        throw new FetchFailedError(url, 'getaddrinfo ENOTFOUND')
+      },
+    })
+
+    expect(seen).toHaveLength(2)
+    expect(result.klass).toBe('structured')
+    expect(result.urlFromBody).toBe(true)
+    expect(result.url).toBe('https://seriouseats.com/other')
+    expect(result.rowUrl).toBe('https://food.com/recipe/oatmeal-raisin-cookies-35813')
+    expect(result.detail).toContain('the page body names https://seriouseats.com/other, which works')
+  })
+
+  it('still calls a row notion-body-only when the body URL is no better', async () => {
+    const body: NotionRecipeBody = {
+      pageId: 'p1',
+      markdown: [
+        '[Jump to Recipe](https://seriouseats.com/other)',
+        '',
+        '## Ingredients',
+        '',
+        '- 2 cups flour',
+        '',
+        '## Instructions',
+        '',
+        '1. Bake it.',
+      ].join('\n'),
+    }
+    const result = await classify(notionRow(), {
+      fetchBody: async () => body,
+      fetchPage: async (url) => {
+        throw new BlockedError(url, 403)
+      },
+    })
+    expect(result.klass).toBe('notion-body-only')
+    expect(result.urlFromBody).toBe(false)
+    expect(result.detail).toContain('is no better')
+  })
+
   it('reports a titleless, bodyless row as unrecoverable instead of crashing', async () => {
     const result = await classify(notionRow({ title: null, link: null }))
     expect(result.klass).toBe('unrecoverable')
@@ -466,6 +537,7 @@ describe('renderReport', () => {
     klass: 'structured',
     fetchOutcome: 'structured',
     url: 'https://bonappetit.com/r/1',
+    rowUrl: 'https://bonappetit.com/r/1',
     urlFromBody: false,
     detail: 'jsonld, 10 ingredients, 4 steps',
     modelCalls: 1,
@@ -515,6 +587,23 @@ describe('renderReport', () => {
     expect(report).toContain('## Everything that is not `structured`')
     expect(report).toContain('**Ham Pot Pie**')
     expect(report).not.toContain('**A recipe**')
+  })
+
+  it('names every row whose source URL came from the page body, with both URLs', () => {
+    const text = renderReport(
+      [
+        row({
+          title: 'Charred Cabbage',
+          url: 'https://seriouseats.com/other',
+          rowUrl: 'https://dead.example/gone',
+          urlFromBody: true,
+        }),
+      ],
+      { generatedAt: '2026-08-25T00:00:00.000Z', elapsedMs: 1000 },
+    )
+    expect(text).toContain('## Rows importing from a URL found in the page body')
+    expect(text).toContain('row link: `https://dead.example/gone`')
+    expect(text).toContain('will import: `https://seriouseats.com/other`')
   })
 
   it('flags a discarded narrative line that carries a quantity', () => {
@@ -646,5 +735,449 @@ describe('createThrottledLlm', () => {
       /stopped calling it/,
     )
     expect(attempts).toBe(6)
+  })
+})
+
+/* -------------------------------------------------------------------------- */
+/* processRow — the composition root                                          */
+/*                                                                            */
+/* Everything above this line tests a pure function. `processRow` is where     */
+/* every module in this repo is actually wired together — the Notion mapping,  */
+/* `runImport`, the body salvage, enrichment, `upsertRecipe`, the metadata     */
+/* pass and the image ingest — and it is the only part of the migration that   */
+/* can destroy data. It ran against a real database for the first time here.   */
+/* -------------------------------------------------------------------------- */
+
+const noopLlm: LlmClient = {
+  async enrich() {
+    return null
+  },
+  async extractRecipe() {
+    return null
+  },
+}
+
+/**
+ * A model that answers. Enrichment landing is what `enrichment_applied` means,
+ * and the difference between an enriched recipe and an unenriched one is the
+ * whole subject of the first defect below.
+ */
+function enrichingLlm(log: string[] = []): LlmClient {
+  return {
+    async enrich({ ingredientLines }) {
+      log.push('enrich')
+      return {
+        description: null,
+        tags: [{ facet: 'course', value: 'main' }],
+        ingredients: ingredientLines.map((line, position) => ({
+          position,
+          quantity: 1,
+          unit: 'cup',
+          item: line.replace(/^[\d\s]+/, ''),
+          note: null,
+        })),
+      }
+    },
+    async extractRecipe() {
+      log.push('extractRecipe')
+      return null
+    },
+  }
+}
+
+const CABBAGE_JSONLD = `<html><head><script type="application/ld+json">${JSON.stringify({
+  '@context': 'https://schema.org',
+  '@type': 'Recipe',
+  name: 'Charred Cabbage with Miso Butter',
+  recipeIngredient: ['1 head green cabbage', '2 Tbsp. white miso'],
+  recipeInstructions: ['Char the cabbage.', 'Whisk the miso butter.'],
+})}</script></head><body><p>Cabbage.</p></body></html>`
+
+// Canonical form: `normalizeSourceUrl` strips `www.` and tracking parameters,
+// and it is the canonical URL that both `upsertRecipe` and the guard below key
+// on.
+const BONAPPETIT_URL = 'https://bonappetit.com/recipe/charred-cabbage'
+const BONAPPETIT_LINK = 'https://www.bonappetit.com/recipe/charred-cabbage'
+
+/** A Notion body that parses by headings alone, so no model call is needed. */
+const CABBAGE_BODY: NotionRecipeBody = {
+  pageId: 'p-b',
+  markdown: ['# Charred Cabbage', '', '## Ingredients', '', '- cabbage', '', '## Instructions', '', '1. Char it.'].join('\n'),
+}
+
+function runtime(db: TestDb, over: Partial<Runtime> = {}): Runtime {
+  return {
+    db: db as unknown as Runtime['db'],
+    createJob,
+    getJob,
+    upsertRecipe,
+    findBySourceUrl,
+    applyNotionMetadata,
+    runImport,
+    store: createMemoryStore(),
+    ingestHeroImage: async () => null,
+    anthropic: noopLlm,
+    schema,
+    eq,
+    and,
+    fetchPage: async (url) => {
+      throw new FetchFailedError(url, 'the test did not stub this URL')
+    },
+    ...over,
+  }
+}
+
+const noBody = async (): Promise<NotionRecipeBody> => ({ pageId: 'p', markdown: '' })
+
+async function readRecipe(db: TestDb, id: string) {
+  const [recipe] = await db.select().from(schema.recipes).where(eq(schema.recipes.id, id))
+  const ings = await db
+    .select()
+    .from(schema.ingredients)
+    .where(eq(schema.ingredients.recipeId, id))
+    .orderBy(schema.ingredients.position)
+  const tags = await db.select().from(schema.recipeTags).where(eq(schema.recipeTags.recipeId, id))
+  return { recipe, ingredients: ings, tags }
+}
+
+describe('processRow — the ordinary import path', () => {
+  it('imports, enriches, and stamps the row with what only Notion knew', async () => {
+    const db = await createTestDb()
+    const rt = runtime(db, { fetchPage: async (url) => page(CABBAGE_JSONLD, url) })
+
+    const result = await processRow(
+      notionRow({
+        pageId: 'p-a',
+        title: 'Charred Cabbage',
+        link: `${BONAPPETIT_LINK}?utm_source=newsletter`,
+        rating: 5,
+        tags: ['Dinner'],
+        createdTime: '2019-11-09 15:04:05Z',
+      }),
+      rt,
+      enrichingLlm(),
+      noBody,
+    )
+
+    expect(result.outcome).toBe('imported')
+    expect(result.via).toBe('import')
+    expect(result.sourceUrl).toBe(BONAPPETIT_URL)
+    expect(result.rowSourceUrl).toBe(BONAPPETIT_URL)
+
+    const stored = await readRecipe(db, result.recipeId!)
+    expect(stored.recipe.extractionMethod).toBe('jsonld')
+    expect(stored.recipe.enrichmentApplied).toBe(true)
+    expect(stored.ingredients).toHaveLength(2)
+    expect(stored.ingredients[0].item).not.toBeNull()
+    expect(stored.tags.length).toBeGreaterThan(0)
+    // The seven years of history the library *is*, preserved.
+    expect(stored.recipe.createdAt.toISOString()).toBe('2019-11-09T15:04:05.000Z')
+    expect(stored.recipe.rating).toBe(5)
+    expect(stored.recipe.status).toBe('made_it')
+  })
+})
+
+describe('processRow — a Notion-body recovery must not overwrite a good recipe', () => {
+  /**
+   * The verified data-loss path, in full.
+   *
+   * Row A imports `bonappetit.com/charred-cabbage` cleanly: enriched, two
+   * parsed ingredients, tags. Row B is a second Notion row pointing at the same
+   * canonical URL, and the publisher answers it with a 403. `runImport` fetches
+   * *before* it dedupes, so the 403 throws first, the job records `blocked`, and
+   * `decideAction` routes row B to the Notion body — which called `upsertRecipe`
+   * directly, bypassing `EnrichmentRegressionError`, the guard built for exactly
+   * this. `upsertRecipe` then found row A's recipe by `sourceUrl` and updated it
+   * in place, replacing its children wholesale.
+   *
+   * Before the fix this test recorded: outcome `body-recovered` on row A's own
+   * recipe id, `extractionMethod` 'notion', `enrichmentApplied` false, a single
+   * ingredient `cabbage` with a null quantity and item, and zero tags. A working
+   * recipe traded for a lossy Notion copy, with no error anywhere.
+   */
+  async function seedEnrichedRecipe(db: TestDb) {
+    const rt = runtime(db, { fetchPage: async (url) => page(CABBAGE_JSONLD, url) })
+    const first = await processRow(
+      notionRow({ pageId: 'p-a', title: 'Charred Cabbage', link: BONAPPETIT_LINK, tags: [] }),
+      rt,
+      enrichingLlm(),
+      noBody,
+    )
+    expect(first.outcome).toBe('imported')
+    return first.recipeId!
+  }
+
+  it('refuses the downgrade and leaves the enriched recipe exactly as it was', async () => {
+    const db = await createTestDb()
+    const recipeId = await seedEnrichedRecipe(db)
+    const before = await readRecipe(db, recipeId)
+
+    const blocked = runtime(db, {
+      fetchPage: async (url) => {
+        throw new BlockedError(url, 403)
+      },
+    })
+    const result = await processRow(
+      notionRow({ pageId: 'p-b', title: 'Cabbage (again)', link: BONAPPETIT_LINK, tags: [] }),
+      blocked,
+      // No model: the body copy lands unenriched, which is the condition
+      // `EnrichmentRegressionError` fires on.
+      noopLlm,
+      async () => CABBAGE_BODY,
+    )
+
+    expect(result.outcome).toBe('skipped')
+    expect(result.recipeId).toBeNull()
+    expect(result.reason).toMatch(/preserved and nothing was overwritten/)
+
+    const after = await readRecipe(db, recipeId)
+    expect(after.recipe.extractionMethod).toBe('jsonld')
+    expect(after.recipe.enrichmentApplied).toBe(true)
+    expect(after.ingredients.map((i) => i.rawText)).toEqual(
+      before.ingredients.map((i) => i.rawText),
+    )
+    expect(after.ingredients.every((i) => i.item !== null)).toBe(true)
+    expect(after.tags.length).toBe(before.tags.length)
+    expect(after.tags.length).toBeGreaterThan(0)
+
+    // And no second copy was inserted instead.
+    const all = await db.select().from(schema.recipes)
+    expect(all).toHaveLength(1)
+  })
+
+  it('is retryable rather than terminal, so a later run with a model can finish it', async () => {
+    const db = await createTestDb()
+    await seedEnrichedRecipe(db)
+    const result = await processRow(
+      notionRow({ pageId: 'p-b', title: 'Cabbage (again)', link: BONAPPETIT_LINK, tags: [] }),
+      runtime(db, {
+        fetchPage: async (url) => {
+          throw new BlockedError(url, 403)
+        },
+      }),
+      noopLlm,
+      async () => CABBAGE_BODY,
+    )
+    expect(isTerminal(result)).toBe(false)
+  })
+
+  it('still stores a body recovery when nothing enriched is in its way', async () => {
+    // The guard must not become a refusal to migrate. A dead URL with no
+    // existing recipe behind it is exactly what the body path is for.
+    const db = await createTestDb()
+    const result = await processRow(
+      notionRow({ pageId: 'p-c', title: 'Ham Pot Pie', link: 'https://getpocket.com/gone' }),
+      runtime(db, {
+        fetchPage: async (url) => {
+          throw new FetchFailedError(url, 'getaddrinfo ENOTFOUND')
+        },
+      }),
+      noopLlm,
+      async () => CABBAGE_BODY,
+    )
+
+    expect(result.outcome).toBe('body-recovered')
+    const stored = await readRecipe(db, result.recipeId!)
+    expect(stored.recipe.extractionMethod).toBe('notion')
+    // The dead URL is kept: it is the recipe's provenance and it is what makes
+    // this path idempotent.
+    expect(stored.recipe.sourceUrl).toBe('https://getpocket.com/gone')
+  })
+
+  it('does not block a body recovery over an existing recipe that was never enriched', async () => {
+    const db = await createTestDb()
+    const url = 'https://example.com/half-a-recipe'
+    await upsertRecipe(db, {
+      extracted: {
+        title: 'Half a recipe',
+        description: null,
+        author: null,
+        publisher: null,
+        claimedTimeMinutes: null,
+        servings: null,
+        yieldText: null,
+        ingredients: [],
+        steps: [],
+        tags: [],
+        heroImageUrl: null,
+        narrativeHtml: null,
+        extractionMethod: 'jsonld',
+      },
+      sourceUrl: url,
+      sourceDomain: 'example.com',
+      enrichmentApplied: false,
+    })
+
+    const result = await processRow(
+      notionRow({ pageId: 'p-d', title: 'Half a recipe', link: url }),
+      runtime(db, {
+        fetchPage: async (u) => {
+          throw new BlockedError(u, 403)
+        },
+      }),
+      noopLlm,
+      async () => CABBAGE_BODY,
+    )
+    expect(result.outcome).toBe('body-recovered')
+  })
+})
+
+describe('processRow — a body-derived source URL is never silent', () => {
+  const JUMP_TO_RECIPE = 'https://seriouseats.com/some-other-recipe'
+
+  /** A Notion clip whose first whole-line link is not this recipe at all. */
+  const CLIPPED_BODY: NotionRecipeBody = {
+    pageId: 'p-e',
+    markdown: [`[Jump to Recipe](${JUMP_TO_RECIPE})`, '', '## Ingredients', '', '- cabbage'].join('\n'),
+  }
+
+  it('carries both URLs on the result, so the swap survives into the resume file', async () => {
+    const db = await createTestDb()
+    const result = await processRow(
+      notionRow({ pageId: 'p-e', title: 'Charred Cabbage', link: 'https://dead.example/gone' }),
+      runtime(db, {
+        fetchPage: async (url) => {
+          if (url === JUMP_TO_RECIPE) return page(CABBAGE_JSONLD, url)
+          throw new FetchFailedError(url, 'getaddrinfo ENOTFOUND')
+        },
+      }),
+      enrichingLlm(),
+      async () => CLIPPED_BODY,
+    )
+
+    expect(result.outcome).toBe('imported')
+    expect(result.via).toBe('body-url')
+    expect(result.sourceUrl).toBe(JUMP_TO_RECIPE)
+    expect(result.rowSourceUrl).toBe('https://dead.example/gone')
+    expect(result.reason).toContain(JUMP_TO_RECIPE)
+    expect(result.reason).toContain('https://dead.example/gone')
+  })
+
+  it('says so in the summary, with both URLs', async () => {
+    const lines: string[] = []
+    const spy = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+      lines.push(args.map(String).join(' '))
+    })
+    try {
+      printSummary({
+        results: [
+          {
+            pageId: 'p-e',
+            title: 'Charred Cabbage',
+            outcome: 'imported',
+            via: 'body-url',
+            recipeId: 'r1',
+            sourceUrl: JUMP_TO_RECIPE,
+            rowSourceUrl: 'https://dead.example/gone',
+            reason: 'source URL recovered from the Notion page body',
+            at: '2026-08-25T00:00:00.000Z',
+          },
+        ],
+        rows: [notionRow({ pageId: 'p-e' })],
+        alreadyDone: 0,
+        llm: createThrottledLlm(noopLlm, 0),
+        elapsedMs: 1000,
+        opts: parseArgs([]),
+      })
+    } finally {
+      spy.mockRestore()
+    }
+
+    const text = lines.join('\n')
+    expect(text).toContain('imported from a URL found in the page body')
+    expect(text).toContain('https://dead.example/gone')
+    expect(text).toContain(JUMP_TO_RECIPE)
+  })
+})
+
+describe('processRow — the hero image is captured before anything throttled', () => {
+  const NOTION_FILE_URL = 'https://prod-files.notion-static.com/hero.jpg?X-Amz-Expires=300'
+  const BODY_WITH_IMAGE: NotionRecipeBody = {
+    pageId: 'p-img',
+    markdown: [
+      `![hero](${NOTION_FILE_URL})`,
+      '',
+      // A link in the preamble, so the body path also makes an import attempt
+      // of its own — one of the two things that used to sit between the body
+      // arriving and the picture being fetched.
+      '[Jump to Recipe](https://alsodead.example/recipe)',
+      '',
+      '## Ingredients',
+      '',
+      '- cabbage',
+    ].join('\n'),
+  }
+
+  it('ingests it first, not after an import attempt and an enrichment call', async () => {
+    const db = await createTestDb()
+    const order: string[] = []
+    const llm = enrichingLlm(order)
+
+    const result = await processRow(
+      notionRow({ pageId: 'p-img', title: 'Ham Pot Pie', link: 'https://dead.example/gone' }),
+      runtime(db, {
+        fetchPage: async (url) => {
+          order.push(`fetchPage ${url}`)
+          throw new FetchFailedError(url, 'getaddrinfo ENOTFOUND')
+        },
+        ingestHeroImage: async ({ recipeId, store }) => {
+          order.push('ingestHeroImage')
+          await store.put(`recipes/${recipeId}/hero.webp`, new Uint8Array([1, 2]), 'image/webp')
+          await store.put(`recipes/${recipeId}/hero-thumb.webp`, new Uint8Array([3]), 'image/webp')
+          return {
+            blobKey: `recipes/${recipeId}/hero.webp`,
+            thumbKey: `recipes/${recipeId}/hero-thumb.webp`,
+            width: 800,
+            height: 600,
+          }
+        },
+      }),
+      llm,
+      async () => BODY_WITH_IMAGE,
+    )
+
+    expect(result.outcome).toBe('body-recovered')
+
+    // The signature on a Notion file URL is good for five minutes. Nothing
+    // throttled may run between the body arriving and those bytes being
+    // fetched. The row's own link is attempted before the body is fetched at
+    // all, so it is allowed to come first; everything after the body is not.
+    expect(order).toEqual([
+      'fetchPage https://dead.example/gone',
+      'ingestHeroImage',
+      'fetchPage https://alsodead.example/recipe',
+      'enrich',
+    ])
+  })
+
+  it('files the blobs under the real recipe id, not the placeholder it was captured with', async () => {
+    const db = await createTestDb()
+    const store = createMemoryStore()
+    const result = await processRow(
+      notionRow({ pageId: 'p-img', title: 'Ham Pot Pie', link: null }),
+      runtime(db, {
+        store,
+        ingestHeroImage: async ({ recipeId, store: s }) => {
+          await s.put(`recipes/${recipeId}/hero.webp`, new Uint8Array([1, 2]), 'image/webp')
+          return {
+            blobKey: `recipes/${recipeId}/hero.webp`,
+            thumbKey: `recipes/${recipeId}/hero-thumb.webp`,
+            width: 800,
+            height: 600,
+          }
+        },
+      }),
+      noopLlm,
+      async () => BODY_WITH_IMAGE,
+    )
+
+    const recipeId = result.recipeId!
+    expect(store.keys()).toEqual([`recipes/${recipeId}/hero.webp`])
+    const [image] = await db
+      .select()
+      .from(schema.images)
+      .where(eq(schema.images.recipeId, recipeId))
+    expect(image.blobKey).toBe(`recipes/${recipeId}/hero.webp`)
+    expect(image.role).toBe('source_hero')
   })
 })
