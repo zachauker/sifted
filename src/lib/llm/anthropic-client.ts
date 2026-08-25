@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { COURSE_VALUES, CUISINE_VALUES, INGREDIENT_VALUES, METHOD_VALUES } from '@/lib/taxonomy'
-import type { LlmClient } from './llm-types'
+import type { LlmClient } from '@/lib/extract/llm-types'
 
 const MODEL = 'claude-sonnet-5'
 

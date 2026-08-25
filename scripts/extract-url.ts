@@ -13,7 +13,7 @@
  * so the output can be piped (e.g. `npm run extract -- <url> | jq .title`).
  */
 import { writeFile } from 'node:fs/promises'
-import { createAnthropicClient } from '../src/lib/extract/anthropic-client'
+import { createAnthropicClient } from '../src/lib/llm/anthropic-client'
 import { extract } from '../src/lib/extract/index'
 import type { LlmClient } from '../src/lib/extract/llm-types'
 import { BlockedError, FetchFailedError, fetchPage } from '../src/lib/fetch/index'

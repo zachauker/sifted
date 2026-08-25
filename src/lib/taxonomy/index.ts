@@ -201,7 +201,7 @@ export function normalizeTags(raws: readonly string[] | null | undefined): TagAs
     const id = `${tag.facet}:${tag.value}`
     if (seen.has(id)) continue
     seen.add(id)
-    out.push(tag)
+    out.push({ facet: tag.facet, value: tag.value })
   }
   return out
 }
