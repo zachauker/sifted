@@ -123,7 +123,31 @@ describe('searchRecipes', () => {
   it('treats an injected operator as a literal term rather than syntax', async () => {
     // Would be a syntax error, or would match everything, if passed through raw.
     expect(await searchRecipes(db, 'gochujang OR chicken')).toEqual([gochujang])
-    expect(await searchRecipes(db, 'gochujang" OR "a')).toEqual([])
+    expect(await searchRecipes(db, 'gochujang" OR "saffron')).toEqual([])
+  })
+
+  it('drops stopwords so one function word cannot zero out a good query', async () => {
+    const rice = await upsertRecipe(db, {
+      extracted: recipe({
+        title: 'Chicken with Rice',
+        ingredients: [ing(0, '2 cups jasmine rice'), ing(1, '6 chicken thighs')],
+        steps: [step(0, 'Steam until tender.')],
+      }),
+      sourceUrl: 'https://example.com/rice',
+      sourceDomain: 'example.com',
+    })
+
+    // Nothing in this recipe contains the literal word "and"; ANDing it in
+    // would turn a perfectly good query into zero results.
+    expect(await searchRecipes(db, 'chicken and rice')).toEqual([rice])
+    expect(await searchRecipes(db, 'chicken with rice')).toEqual([rice])
+    expect(await searchRecipes(db, 'the chicken and the rice')).toEqual([rice])
+  })
+
+  it('returns nothing for a query that is only stopwords', async () => {
+    for (const input of ['the and of', 'a', 'the', 'and', 'with', 'of the', 'to in on for']) {
+      expect(await searchRecipes(db, input)).toEqual([])
+    }
   })
 
   it('honours the limit', async () => {

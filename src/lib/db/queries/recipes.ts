@@ -147,6 +147,17 @@ export async function upsertRecipe(db: Db, input: UpsertInput): Promise<string> 
 // everything) instead of searching for the literal word "AND".
 const FTS_OPERATORS = new Set(['AND', 'OR', 'NOT', 'NEAR'])
 
+// Dropped because every term is ANDed: one function word the document happens
+// not to contain would zero out an otherwise good query. "chicken and rice"
+// must find "Chicken with Rice", and a search box returning nothing looks like
+// an empty library rather than a wrong query — the worst failure mode we have.
+//
+// Kept deliberately short. Aggressive stopword lists start eating real terms,
+// and for recipes even `in` is borderline (an "in-shell" ingredient, say).
+const STOPWORDS = new Set([
+  'a', 'an', 'and', 'the', 'or', 'of', 'with', 'for', 'in', 'on', 'to',
+])
+
 // A pathological query — a pasted paragraph, a fuzzer — would otherwise build an
 // expression tree deep enough for SQLite to reject outright.
 const MAX_TERMS = 16
@@ -157,6 +168,10 @@ const MAX_TERM_LENGTH = 64
  * there is nothing to search for. Tokens are quoted, which makes every operator
  * character and keyword a literal term rather than syntax; because the tokenizer
  * only emits letters and digits, no token can carry a quote back out.
+ *
+ * Tokens are otherwise passed through untransformed — no stemming or folding
+ * here, because the FTS5 tokenizer (`porter unicode61`) already does both, on
+ * the indexed side and the query side alike.
  */
 export function toMatchExpression(query: string): string | null {
   const tokens = (query ?? '').match(/[\p{L}\p{N}]+/gu)
@@ -165,9 +180,12 @@ export function toMatchExpression(query: string): string | null {
   const terms: string[] = []
   for (const token of tokens) {
     if (FTS_OPERATORS.has(token)) continue
+    if (STOPWORDS.has(token.toLowerCase())) continue
     terms.push(token.slice(0, MAX_TERM_LENGTH))
     if (terms.length === MAX_TERMS) break
   }
+  // A query of nothing but stopwords searches for nothing. Returning every
+  // recipe instead would be strictly worse than returning none.
   if (terms.length === 0) return null
 
   // Multi-word queries AND, which is what a search box is expected to do:
