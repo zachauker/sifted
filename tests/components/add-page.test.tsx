@@ -40,7 +40,7 @@ describe('UrlImportForm', () => {
       // The polling effect fires an immediate tick regardless of interval
       // length, so this has to answer something sane rather than assume
       // it's never called.
-      return jsonResponse({ jobs: [{ id: 'job-1', status: 'running', recipeId: null }] })
+      return jsonResponse({ job: { id: 'job-1', status: 'running', recipeId: null } })
     })
     vi.stubGlobal('fetch', fetchMock)
 
@@ -67,11 +67,13 @@ describe('UrlImportForm', () => {
       if (url === '/api/recipes/import' && method === 'POST') {
         return jsonResponse({ status: 'queued', jobId: 'job-1' }, 202)
       }
-      if (url === '/api/jobs') {
+      // The poller looks the job up by the id it already knows, not by
+      // scanning the list route — see the regression test below for why.
+      if (url === '/api/jobs/job-1') {
         jobsCalls += 1
         const done = jobsCalls >= 2
         return jsonResponse({
-          jobs: [{ id: 'job-1', status: done ? 'done' : 'running', recipeId: done ? 'recipe-1' : null }],
+          job: { id: 'job-1', status: done ? 'done' : 'running', recipeId: done ? 'recipe-1' : null },
         })
       }
       if (url === '/api/library-index') {
@@ -91,6 +93,104 @@ describe('UrlImportForm', () => {
 
     const link = await screen.findByRole('link', { name: 'Open it' })
     expect(link).toHaveAttribute('href', '/recipes/chicken-korma')
+  })
+
+  it('polls the job it already knows the id of, never the capped-and-unfiltered list route', async () => {
+    // Regression for the poller finding its job by scanning `GET /api/jobs`
+    // (`listJobs`, capped at the newest 50 rows of every status): during a
+    // migration burst the job it's waiting on can fall out of that window,
+    // and the poller then runs its full timeout for an import that actually
+    // finished. `GET /api/jobs/[id]` (`getJob`) has no window to fall out of.
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = init?.method ?? 'GET'
+      if (url === '/api/recipes/import' && method === 'POST') {
+        return jsonResponse({ status: 'queued', jobId: 'job-1' }, 202)
+      }
+      if (url === '/api/jobs/job-1') {
+        return jsonResponse({ job: { id: 'job-1', status: 'done', recipeId: 'recipe-1' } })
+      }
+      if (url === '/api/library-index') {
+        return jsonResponse({ entries: [{ id: 'recipe-1', slug: 'chicken-korma' }] })
+      }
+      throw new Error(`unexpected fetch: ${method} ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const user = userEvent.setup()
+    render(<UrlImportForm pollIntervalMs={5} maxAttempts={50} />)
+
+    await user.type(screen.getByLabelText('Recipe URL'), 'https://example.com/korma')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await screen.findByRole('link', { name: 'Open it' })
+
+    expect(fetchMock).not.toHaveBeenCalledWith('/api/jobs', expect.anything())
+    expect(fetchMock).not.toHaveBeenCalledWith('/api/jobs')
+  })
+
+  it('reports a polled duplicate the same way as a synchronous one, with a link to the existing recipe', async () => {
+    // `markDuplicate` in `run-import.ts` exists specifically for a
+    // shortened/redirecting URL that only resolves to a known recipe
+    // *after* the fetch — the synchronous POST response cannot know that
+    // yet, so it answers `queued`, and the `duplicate` only shows up later,
+    // from the poll. Before this test, the poller collapsed a polled `done`
+    // and `duplicate` into the same "Saved." message, telling the user
+    // something was saved when nothing was.
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = init?.method ?? 'GET'
+      if (url === '/api/recipes/import' && method === 'POST') {
+        return jsonResponse({ status: 'queued', jobId: 'job-1' }, 202)
+      }
+      if (url === '/api/jobs/job-1') {
+        return jsonResponse({ job: { id: 'job-1', status: 'duplicate', recipeId: 'recipe-9' } })
+      }
+      if (url === '/api/library-index') {
+        return jsonResponse({ entries: [{ id: 'recipe-9', slug: 'existing-recipe' }] })
+      }
+      throw new Error(`unexpected fetch: ${method} ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const user = userEvent.setup()
+    render(<UrlImportForm pollIntervalMs={5} maxAttempts={50} />)
+
+    await user.type(screen.getByLabelText('Recipe URL'), 'https://example.com/korma')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    expect(await screen.findByText(/Already in your library/)).toBeInTheDocument()
+    const link = screen.getByRole('link', { name: 'Open it' })
+    expect(link).toHaveAttribute('href', '/recipes/existing-recipe')
+
+    // Must not claim "Saved." anywhere alongside the duplicate notice.
+    expect(screen.queryByText(/^Saved\./)).not.toBeInTheDocument()
+  })
+
+  it('does not silently poll to timeout when a done job carries no recipeId', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = init?.method ?? 'GET'
+      if (url === '/api/recipes/import' && method === 'POST') {
+        return jsonResponse({ status: 'queued', jobId: 'job-1' }, 202)
+      }
+      if (url === '/api/jobs/job-1') {
+        return jsonResponse({ job: { id: 'job-1', status: 'done', recipeId: null } })
+      }
+      throw new Error(`unexpected fetch: ${method} ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const user = userEvent.setup()
+    render(<UrlImportForm pollIntervalMs={5} maxAttempts={50} />)
+
+    await user.type(screen.getByLabelText('Recipe URL'), 'https://example.com/korma')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    // Resolves promptly to a visible alert rather than sitting on
+    // "Importing…" until `maxAttempts` (60s in production) is exhausted.
+    expect(await screen.findByRole('alert')).toBeInTheDocument()
+    expect(screen.queryByText(/Still working after a minute/)).not.toBeInTheDocument()
   })
 
   it('reports a duplicate plainly, with a link straight to the existing recipe', async () => {

@@ -4,9 +4,9 @@ import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 
 /**
- * How often to poll `GET /api/jobs` while a job is queued or running, and
- * how many times before giving up and pointing at the tray instead. A prop
- * rather than a bare constant so tests can drive this in milliseconds
+ * How often to poll `GET /api/jobs/[id]` while a job is queued or running,
+ * and how many times before giving up and pointing at the tray instead. A
+ * prop rather than a bare constant so tests can drive this in milliseconds
  * instead of seconds — see `tests/components/add-page.test.tsx`.
  */
 const DEFAULT_POLL_INTERVAL_MS = 1500
@@ -35,12 +35,11 @@ type Phase =
 /**
  * Looks a recipe id up in the whole-library index to find its slug.
  *
- * `GET /api/jobs` (the only per-job status this page can poll — see the
- * comment below) returns raw `import_jobs` rows, which carry `recipeId`
- * but not the recipe's `slug`, and a job route is not the place to start
- * joining in recipe columns. `/api/library-index` already has to answer
- * "what's this recipe's slug" for the whole app, so this reuses it rather
- * than inventing a second lookup.
+ * `GET /api/jobs/[id]` returns the raw `import_jobs` row, which carries
+ * `recipeId` but not the recipe's `slug`, and a job route is not the place
+ * to start joining in recipe columns. `/api/library-index` already has to
+ * answer "what's this recipe's slug" for the whole app, so this reuses it
+ * rather than inventing a second lookup.
  */
 async function findSlug(recipeId: string): Promise<string | null> {
   try {
@@ -72,21 +71,25 @@ export function UrlImportForm({
 
     const tick = async () => {
       attemptsRef.current += 1
-      let jobs: JobRow[]
+      let job: JobRow | null
       try {
-        const res = await fetch('/api/jobs')
-        if (!res.ok) throw new Error('failed to load job status')
-        const body = (await res.json()) as { jobs?: JobRow[] }
+        // The job's own id, not a scan of `GET /api/jobs` (`listJobs`,
+        // capped at the newest 50 rows of every status): during a migration
+        // burst this job can fall out of that window entirely, and the
+        // scan-based poller would then run its full timeout for an import
+        // that actually finished seconds in. `GET /api/jobs/[id]` (`getJob`)
+        // has no window to fall out of.
+        const res = await fetch(`/api/jobs/${phase.jobId}`)
+        if (!res.ok && res.status !== 404) throw new Error('failed to load job status')
+        const body = (await res.json()) as { job?: JobRow | null }
         // Defensive against a malformed or unexpectedly-shaped response —
-        // an absent `jobs` array should mean "nothing to report yet", not
-        // an uncaught crash on the next line.
-        jobs = body.jobs ?? []
+        // an absent `job` should mean "nothing to report yet", not an
+        // uncaught crash on the next line.
+        job = body.job ?? null
       } catch {
         return // transient — the next tick tries again
       }
       if (cancelled) return
-
-      const job = jobs.find((j) => j.id === phase.jobId)
       if (!job) return
 
       if (job.status === 'queued' || job.status === 'running') {
@@ -105,10 +108,37 @@ export function UrlImportForm({
 
       if (job.status === 'done' || job.status === 'duplicate') {
         const recipeId = job.recipeId
-        const slug = recipeId ? await findSlug(recipeId) : null
-        if (!cancelled && recipeId) {
-          setPhase({ kind: 'done', recipeId, slug })
+        // A `done` or `duplicate` job with no `recipeId` is not a state
+        // `runImport` is meant to reach — `markDone` and `markDuplicate`
+        // both require one — but resolving to a definite, visible outcome
+        // here rather than falling through to keep polling matters: with no
+        // handling for this, the effect just returns and polls in place
+        // until `maxAttempts` is exhausted, telling the user nothing for up
+        // to a minute over what should already be a known-bad outcome.
+        if (!recipeId) {
+          if (!cancelled) {
+            setPhase({
+              kind: 'error',
+              message:
+                'The import finished, but recorded no recipe. Check the needs-attention list.',
+            })
+          }
+          return
         }
+
+        const slug = await findSlug(recipeId)
+        if (cancelled) return
+
+        // A polled `duplicate` gets the same "already saved, here it is"
+        // treatment as the synchronous one from the POST response — see
+        // `markDuplicate` in `run-import.ts`, which exists precisely for a
+        // shortened or redirecting URL that only resolves to a known recipe
+        // *after* the fetch, so the synchronous response cannot report it.
+        // Collapsing this into `done` would tell the user something was
+        // saved when nothing was.
+        setPhase(
+          job.status === 'duplicate' ? { kind: 'duplicate', recipeId, slug } : { kind: 'done', recipeId, slug },
+        )
         return
       }
 

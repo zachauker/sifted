@@ -4,6 +4,7 @@ import { createTestDb, type TestDb } from '../helpers/db'
 import { importJobs } from '@/lib/db/schema'
 import {
   createJob,
+  findInFlightJob,
   listJobs,
   listJobsNeedingAttention,
   markFailed,
@@ -144,5 +145,65 @@ describe('listJobsNeedingAttention', () => {
     }
 
     expect(await listJobsNeedingAttention(db, 2)).toHaveLength(2)
+  })
+})
+
+describe('findInFlightJob', () => {
+  /**
+   * The wedge this whole describe block exists to escape.
+   *
+   * `run-import.ts` leaves a job on `running` "for a sweeper to reap" when
+   * even the failure write can't land — and no sweeper exists. With no age
+   * bound, `findInFlightJob` matches `running` forever: once a job is stuck
+   * there, both capture paths report `already_importing` for that URL for
+   * good, with no way in the product to clear it (no delete endpoint, retry
+   * 409s on `running`). Manually confirmed this reproduces against the
+   * pre-fix `findInFlightJob` (matching `queued|running` with no age bound):
+   * the "long-stale running job no longer blocks" case below failed, with
+   * the stale job still coming back from `findInFlightJob` after nine
+   * simulated minutes.
+   *
+   * `createdAt` is the only timestamp `markRunning` leaves behind — it
+   * clears `finishedAt` but sets nothing marking when the row *entered*
+   * `running` — and in the ordinary flow (create, then kick off `runImport`
+   * in the same request) it lands within milliseconds of that transition, so
+   * it stands in for "how long has this been running" here.
+   */
+  it('a recent running job still blocks a duplicate import', async () => {
+    const jobId = await createJob(db, 'https://example.com/fresh', null)
+    await markRunning(db, jobId)
+
+    const inFlight = await findInFlightJob(db, 'https://example.com/fresh')
+    expect(inFlight?.id).toBe(jobId)
+  })
+
+  it('a long-stale running job no longer blocks — it is not in flight, it is dead', async () => {
+    const jobId = await createJob(db, 'https://example.com/wedged', null)
+    await markRunning(db, jobId)
+
+    vi.advanceTimersByTime(9 * 60 * 1000)
+
+    const inFlight = await findInFlightJob(db, 'https://example.com/wedged')
+    expect(inFlight).toBeUndefined()
+  })
+
+  it('a queued job of any age still blocks — queued is retryable, not a wedge', async () => {
+    const jobId = await createJob(db, 'https://example.com/still-queued', null)
+
+    vi.advanceTimersByTime(9 * 60 * 1000)
+
+    const inFlight = await findInFlightJob(db, 'https://example.com/still-queued')
+    expect(inFlight?.id).toBe(jobId)
+  })
+
+  it('does not match a done, failed, or duplicate job regardless of age', async () => {
+    const done = await createJob(db, 'https://example.com/done', null)
+    await db.update(importJobs).set({ status: 'done' }).where(eq(importJobs.id, done))
+
+    const failed = await createJob(db, 'https://example.com/failed', null)
+    await markFailed(db, failed, 'fetch_failed', new Error('HTTP 503'))
+
+    expect(await findInFlightJob(db, 'https://example.com/done')).toBeUndefined()
+    expect(await findInFlightJob(db, 'https://example.com/failed')).toBeUndefined()
   })
 })

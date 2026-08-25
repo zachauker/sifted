@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 import Link from 'next/link'
 import { auth, signOut } from '@/lib/auth'
 import { db } from '@/lib/db'
-import { listJobs } from '@/lib/db/queries/jobs'
+import { countJobsNeedingAttention } from '@/lib/db/queries/jobs'
 
 /**
  * The app shell: a single-row header with four things in it — a link to the
@@ -18,12 +18,21 @@ import { listJobs } from '@/lib/db/queries/jobs'
 export default async function AppLayout({ children }: { children: ReactNode }) {
   // Two independent reads, not two round trips: `auth()` decodes the JWT
   // cookie already sent with the request (no DB query — see the session
-  // strategy in `src/lib/auth.ts`), and `listJobs` is a single indexed
-  // query. Both run on every request through this layout; for two users
-  // that's negligible, but if the job list grows large enough to notice,
-  // this is the place to memoize or narrow the query to `status = 'failed'`.
-  const [session, jobs] = await Promise.all([auth(), listJobs(db)])
-  const failedCount = jobs.filter((job) => job.status === 'failed').length
+  // strategy in `src/lib/auth.ts`), and `countJobsNeedingAttention` is a
+  // single indexed `count(*)` with no rows to materialize. Both run on every
+  // request through this layout.
+  //
+  // Deliberately not `listJobs(db)` filtered client-side for `status ===
+  // 'failed'`, which is what this used to be: `listJobs` defaults to the
+  // newest 50 rows of *every* status, so a failed job sitting behind 50+
+  // newer successes — the 156-recipe migration burst is exactly this shape —
+  // falls out of that window, and the badge reads 0 while `/needs-attention`
+  // still lists the failure (see `tests/app/layout.test.tsx`). Counting with
+  // the same status filter the tray itself queries on
+  // (`listJobsNeedingAttention`'s `failed` / `running` / `queued`) is the fix
+  // for the same reason it was the fix there: it has no row cap to fall out
+  // of, and the badge and the tray agree on what "needs attention" means.
+  const [session, needsAttentionCount] = await Promise.all([auth(), countJobsNeedingAttention(db)])
 
   return (
     <div className="flex min-h-full flex-col">
@@ -36,9 +45,9 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
           <Link href="/settings">Settings</Link>
           <Link href="/needs-attention">
             Needs attention
-            {failedCount > 0 && (
+            {needsAttentionCount > 0 && (
               <span className="ml-1 rounded-full bg-red-600 px-1.5 py-0.5 text-xs font-semibold text-white">
-                {failedCount}
+                {needsAttentionCount}
               </span>
             )}
           </Link>
