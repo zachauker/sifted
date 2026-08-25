@@ -166,23 +166,33 @@ describe('updateUserFields and the search index', () => {
     expect(await searchRecipes(db, 'buttermilk')).toEqual([recipeId])
   })
 
-  it('survives a re-import: upsertRecipe blanks the FTS note, and re-saving refills it', async () => {
+  it('survives a re-import: the note stays findable afterwards', async () => {
     await updateUserFields(db, recipeId, { notes: 'Brine it in buttermilk overnight.' })
+    expect(await searchRecipes(db, 'buttermilk')).toEqual([recipeId])
 
-    // A re-extraction preserves `recipes.notes` but rewrites the FTS row with
-    // an empty notes column. That is a known, documented gap in `upsertRecipe`
-    // — asserted here so the next person sees it rather than discovering it
-    // through a search that quietly stopped working.
+    // The documented repair for an unenriched recipe is a re-import, so this
+    // is the path most likely to run over a recipe someone has annotated. The
+    // note is user-authored and cannot be regenerated from the page, so
+    // upsertRecipe carries it into the rewritten FTS row rather than blanking
+    // it and leaving a note that is stored, displayed, and unfindable.
     await upsertRecipe(db, {
       extracted: extracted(),
       sourceUrl: 'https://example.com/gochujang',
       sourceDomain: 'example.com',
     })
-    expect((await row(recipeId))?.notes).toBe('Brine it in buttermilk overnight.')
-    expect(await searchRecipes(db, 'buttermilk')).toEqual([])
 
-    await updateUserFields(db, recipeId, { notes: 'Brine it in buttermilk overnight.' })
+    expect((await row(recipeId))?.notes).toBe('Brine it in buttermilk overnight.')
     expect(await searchRecipes(db, 'buttermilk')).toEqual([recipeId])
+  })
+
+  it('re-import leaves an un-annotated recipe with an empty FTS note', async () => {
+    await upsertRecipe(db, {
+      extracted: extracted(),
+      sourceUrl: 'https://example.com/gochujang',
+      sourceDomain: 'example.com',
+    })
+    expect((await row(recipeId))?.notes).toBeNull()
+    expect(await searchRecipes(db, 'buttermilk')).toEqual([])
   })
 
   it('recovers when the recipe has no FTS row at all', async () => {

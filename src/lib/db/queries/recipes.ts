@@ -190,11 +190,23 @@ export async function upsertRecipe(db: Db, input: UpsertInput): Promise<string> 
     // the base row would leave the previous extraction's terms searchable
     // forever, and a search hit that opens a recipe not containing the term is
     // the kind of bug nobody reports and everybody distrusts.
+    // Carry the household note across. It is user-authored and never arrives
+    // from extraction, so rewriting the row with an empty notes column would
+    // leave a note that is still stored and still displayed but no longer
+    // findable — and the documented repair for an unenriched recipe is exactly
+    // a re-import, so the search index would silently rot on the recipes most
+    // likely to be repaired.
+    const existingNote = await tx
+      .select({ notes: recipes.notes })
+      .from(recipes)
+      .where(eq(recipes.id, recipeId))
+      .get()
+
     await tx.run(sql`DELETE FROM recipes_fts WHERE recipe_id = ${recipeId}`)
     await tx.run(sql`
       INSERT INTO recipes_fts (recipe_id, title, ingredients, steps, notes, narrative)
       VALUES (${recipeId}, ${extracted.title}, ${ingredientsText(extracted)},
-              ${stepsText(extracted)}, '', ${narrativeText(extracted)})
+              ${stepsText(extracted)}, ${existingNote?.notes ?? ''}, ${narrativeText(extracted)})
     `)
 
     return recipeId
