@@ -29,4 +29,20 @@ describe('memory blob store', () => {
     await store.delete('k')
     expect(await store.get('k')).toBeNull()
   })
+
+  it('snapshots the bytes at put time, matching the real store', async () => {
+    const store = createMemoryStore()
+    const data = new Uint8Array([1, 2, 3])
+    await store.put('k', data, 'application/octet-stream')
+    data[0] = 99
+    expect(await store.get('k')).toEqual(new Uint8Array([1, 2, 3]))
+  })
+
+  it('does not let a caller mutate what it read back corrupt the store', async () => {
+    const store = createMemoryStore()
+    await store.put('k', new Uint8Array([1, 2, 3]), 'application/octet-stream')
+    const read = await store.get('k')
+    read![0] = 99
+    expect(await store.get('k')).toEqual(new Uint8Array([1, 2, 3]))
+  })
 })
