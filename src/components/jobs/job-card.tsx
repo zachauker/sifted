@@ -112,6 +112,15 @@ function RetryButton({ jobId, label }: { jobId: string; label: string }) {
  * *inspected*, live-modified DOM) — that is what the instructions below
  * name, because DevTools' Elements panel can differ from what the server
  * actually sent.
+ *
+ * That instruction only works on a desktop browser. Mobile Safari — the
+ * browser this two-person, phone-first app is mostly used from — has no
+ * View Page Source at all, so a second sentence points at the recovery path
+ * that actually works from a phone: a Shortcut variant that attaches the
+ * page contents to the share, described in `docs/ios-shortcut.md`. Written
+ * here rather than invented and left untested, because View Page Source on
+ * mobile genuinely does not exist and pretending otherwise would be a dead
+ * end with no honest way to complete it.
  */
 function PasteHtmlForm({ jobId }: { jobId: string }) {
   const [html, setHtml] = useState('')
@@ -130,6 +139,12 @@ function PasteHtmlForm({ jobId }: { jobId: string }) {
         Open the page in your own browser, right-click anywhere on it and choose{' '}
         <strong>View Page Source</strong> (Ctrl+U on Windows, Cmd+Option+U on a Mac). Select
         all of that page, copy it, and paste it below.
+      </p>
+      <p className="mt-2 text-sm text-neutral-600 dark:text-neutral-400">
+        On a phone, View Page Source isn&apos;t available — instead, re-share the page using
+        the &quot;send page contents&quot; Shortcut described in{' '}
+        <code className="text-xs">docs/ios-shortcut.md</code>, which attaches the page itself
+        to the share so nothing needs to be pasted by hand.
       </p>
       <label htmlFor={fieldId} className="sr-only">
         Pasted page source for {jobId}
@@ -202,8 +217,9 @@ export function JobCard({ job, onDismiss }: { job: Job; onDismiss: (id: string) 
     )
   }
 
-  // Only `failed` remains — `done` and `duplicate` are filtered out by the
-  // tray before any card is rendered, since neither needs attention.
+  // Only `failed` remains — `done` and `duplicate` never reach this
+  // component, because `listJobsNeedingAttention` never selects them (see
+  // `src/lib/db/queries/jobs.ts`).
   const explanation = explainFailure(job)
 
   return (

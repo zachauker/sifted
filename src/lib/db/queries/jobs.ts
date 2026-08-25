@@ -1,4 +1,4 @@
-import { desc, eq, sql } from 'drizzle-orm'
+import { desc, eq, inArray, sql } from 'drizzle-orm'
 import type { Db } from '@/lib/db'
 import { importJobs } from '@/lib/db/schema'
 
@@ -148,4 +148,35 @@ export async function listJobs(db: Db, limit = 50) {
 
 export async function getJob(db: Db, jobId: string) {
   return db.select().from(importJobs).where(eq(importJobs.id, jobId)).get()
+}
+
+/**
+ * The rows the needs-attention tray actually needs — `failed`, `running`
+ * and `queued` — fetched directly, rather than sliced from `listJobs`'s
+ * newest N of *every* status.
+ *
+ * That slicing is the wrong query for this screen: the migration replays
+ * 156 imports in one burst, and if an early one fails while fifty-plus later
+ * ones succeed, `listJobs(db, 50)` no longer contains the failure at all —
+ * "the newest 50" is dominated by successes, and the tray that exists
+ * specifically to surface the failure shows nothing wrong. Filtering after
+ * the fact doesn't fix it either, because the failure was never in the page
+ * that got fetched. Selecting on `status` directly is the only way the row
+ * is guaranteed to be there.
+ *
+ * No default limit: the set this selects is bounded by how many imports are
+ * actually broken or in flight, which has nothing to do with how much
+ * traffic the app has ever seen, so there is no traffic-shaped number to cap
+ * it at. A caller that wants one may still pass one.
+ *
+ * Same ordering as `listJobs`, for the same reason: `created_at` only holds
+ * seconds, so a burst ties, and `rowid` is what breaks the tie correctly.
+ */
+export async function listJobsNeedingAttention(db: Db, limit?: number) {
+  const base = db
+    .select()
+    .from(importJobs)
+    .where(inArray(importJobs.status, ['failed', 'running', 'queued']))
+    .orderBy(desc(importJobs.createdAt), sql`${importJobs}.rowid desc`)
+  return limit === undefined ? base : base.limit(limit)
 }

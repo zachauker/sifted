@@ -103,28 +103,13 @@ describe('the needs-attention tray', () => {
     expect(screen.queryByRole('button', { name: /retry/i })).not.toBeInTheDocument()
   })
 
-  it('does not render done or duplicate jobs at all', () => {
-    // Chosen behavior: `done` and `duplicate` jobs need nothing from anyone,
-    // so the tray drops them rather than showing a "resolved" card — this
-    // screen exists to be short and worth checking, and a finished import
-    // belongs in the library, not here.
-    render(
-      <NeedsAttentionTray
-        jobs={[
-          job({ url: 'https://example.com/done', status: 'done', failureKind: null, error: null }),
-          job({
-            url: 'https://example.com/dup',
-            status: 'duplicate',
-            failureKind: null,
-            error: null,
-          }),
-        ]}
-      />,
-    )
-    expect(screen.getByText('Nothing needs attention.')).toBeInTheDocument()
-    expect(screen.queryByText('https://example.com/done')).not.toBeInTheDocument()
-    expect(screen.queryByText('https://example.com/dup')).not.toBeInTheDocument()
-  })
+  // `done` and `duplicate` jobs never reach this component: the tray is fed
+  // by `listJobsNeedingAttention` (`src/lib/db/queries/jobs.ts`), which
+  // selects only `failed` / `running` / `queued` at the database layer.
+  // That is where "does a job need attention" is decided and tested (see
+  // `tests/db/jobs.test.ts`) — re-filtering `done`/`duplicate` here as well
+  // would encode the same rule a second time, free to drift from the one
+  // that actually enforces it.
 
   it('pasting HTML and retrying calls the retry endpoint with that HTML in the body', async () => {
     const user = userEvent.setup()

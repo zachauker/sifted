@@ -1,5 +1,5 @@
 import { db } from '@/lib/db'
-import { listJobs } from '@/lib/db/queries/jobs'
+import { listJobsNeedingAttention } from '@/lib/db/queries/jobs'
 import { NeedsAttentionTray } from '@/components/jobs/needs-attention-tray'
 
 /**
@@ -9,18 +9,16 @@ import { NeedsAttentionTray } from '@/components/jobs/needs-attention-tray'
  * later finish becomes visible. See `NeedsAttentionTray` for what "visible"
  * means per `failureKind`.
  *
- * `listJobs` caps at 50 rows, newest first. For the day-to-day case (a share
- * or two a week) that is every job that has ever existed. It is not enough
- * after a bulk event: the 156-recipe Notion migration replayed every import
- * in one burst, and if a meaningful fraction of those failed, only the
- * newest 50 of *all* jobs — successes included — would be visible here, and
- * older failures would be invisible with no indication anything was cut off.
- * Widening this page past a flat "show the newest 50" (pagination, or a
- * status-filtered query) is real scope this task doesn't cover; flagged here
- * rather than fixed silently.
+ * Deliberately `listJobsNeedingAttention`, not `listJobs`. `listJobs` caps
+ * at the newest 50 rows of *every* status, and the 156-recipe Notion
+ * migration replays every import in one burst — a fixed-size window of "the
+ * newest N" can be dominated by successes and miss an older failure
+ * entirely, with nothing telling anyone it was cut off. Selecting on
+ * `failed` / `running` / `queued` directly, with no row cap, means the row
+ * is there regardless of how much traffic came after it.
  */
 export default async function NeedsAttentionPage() {
-  const jobs = await listJobs(db)
+  const jobs = await listJobsNeedingAttention(db)
 
   return (
     <div className="mx-auto w-full max-w-2xl px-4 py-6">

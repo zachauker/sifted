@@ -73,6 +73,17 @@ along with the URL: add a **Get Contents of Web Page** action and include an
 `html` key in the JSON body. The API already accepts that field, so this is a
 Shortcut change only, with no server work.
 
+**This is no longer hypothetical.** Both measured publishers — Allrecipes and
+Simply Recipes — need it, and the needs-attention tray's `blocked` card now
+tells people to come here for it: on a desktop browser the recovery is
+View Page Source, copy, paste into the retry form, but mobile Safari has no
+View Page Source at all, and this is a phone-first app. Build the second
+Shortcut variant above — **Get Contents of Web Page** feeding an `html` key
+alongside `url` in the same JSON body the first Shortcut sends — and use it
+in place of **Save to Recipes** for anything from a blocked publisher.
+Everything else about the setup (the token, the headers, the notification)
+is identical to the first Shortcut.
+
 ## Replacing or revoking a token
 
 Tokens are per-phone, which is the point: if a phone is lost, revoke only its

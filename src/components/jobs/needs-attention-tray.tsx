@@ -39,23 +39,23 @@ function saveDismissed(ids: ReadonlySet<string>) {
  * The needs-attention tray: everything a background import might need a
  * human to look at.
  *
- * `done` and `duplicate` jobs are filtered out entirely rather than shown
- * "resolved" — they are the two outcomes that need nothing from anyone, and
- * this screen exists to be short and worth checking. The library and the
- * job's own history (via `recipeId`) are where a finished import belongs.
+ * `jobs` is expected to already be the output of `listJobsNeedingAttention`
+ * — `failed`, `running` and `queued` only. `done` and `duplicate` are not
+ * filtered out again here: that would be the same "needs attention" rule
+ * encoded a second time, in a second place, free to drift from the one the
+ * query enforces (the query's own tests are what actually guard it — see
+ * `tests/db/jobs.test.ts`). The library and the job's own history (via
+ * `recipeId`) are where a finished import belongs, not this screen.
  *
- * This is a snapshot of the `listJobs` rows passed in as props at render
- * time, not a live view — see the comment on `SentNotice` in `job-card.tsx`
- * for what that means after a retry is submitted.
+ * This is a snapshot of the rows passed in as props at render time, not a
+ * live view — see the comment on `SentNotice` in `job-card.tsx` for what
+ * that means after a retry is submitted.
  */
 export function NeedsAttentionTray({ jobs }: { jobs: Job[] }) {
   const [dismissed, setDismissed] = useState<ReadonlySet<string>>(() => loadDismissed())
 
   const visible = useMemo(
-    () =>
-      jobs.filter(
-        (job) => job.status !== 'done' && job.status !== 'duplicate' && !dismissed.has(job.id),
-      ),
+    () => jobs.filter((job) => !dismissed.has(job.id)),
     [jobs, dismissed],
   )
 
