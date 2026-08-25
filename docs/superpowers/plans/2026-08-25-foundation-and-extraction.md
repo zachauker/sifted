@@ -2334,6 +2334,100 @@ Plan 2 (persistence and the import API) needs from this work:
 - The `ExtractedRecipe` contract, which the Drizzle schema mirrors.
 - The `BlockedError` / `FetchFailedError` distinction, which determines whether a
   failed import goes to the needs-attention tray or is retried.
-- **The Bon Appétit finding from Task 12, Step 5.** If Bon Appétit blocks
-  datacenter fetches, the phone-supplied-HTML path is plan 2's first task rather
-  than a later refinement — it covers 28% of the library.
+- **The blocking picture, measured 2026-08-25 against real library URLs.** The
+  spec's central assumption was wrong in both directions:
+
+  | Publisher | Result | Library share |
+  | --- | --- | --- |
+  | Bon Appétit (3 URLs) | **200, clean JSON-LD** | 44 recipes (28%) |
+  | Café Delites | 200, clean JSON-LD | 8 |
+  | Easy Weeknight Recipes | 200, clean JSON-LD | 1 |
+  | Allrecipes (2 URLs) | **403 → `BlockedError`** | 4 |
+  | Simply Recipes | **403 → `BlockedError`** | 2 |
+
+  Bon Appétit — the publisher the spec called the biggest risk — fetches and
+  parses fine. Allrecipes and Simply Recipes block instead, and they block a
+  *residential* IP with a browser user agent, so they are fingerprinting more
+  than datacenter ranges; the phone-supplied-HTML fallback may not rescue them
+  either, and a headless browser may be required.
+
+  **This was measured from the user's home machine, not from Vercel.** Condé
+  Nast blocks datacenter IPs specifically, so the Bon Appétit result does not
+  prove a deployed function can fetch it. Settle that with one request from a
+  deployed function early in plan 2 — it is cheap and it decides whether the
+  phone-supplied-HTML path is a first-class feature or a rarely-used fallback.
+
+- **Notion `Link` values are not all bare URLs.** At least two rows store the
+  link as markdown (`[https://…](https://…)`). The migration must unwrap that
+  before calling `normalizeSourceUrl`, or those recipes fail to import.
+
+- **`narrativeHtml` requires attribute-level sanitization at the render layer.**
+  Measured during Task 7: Readability strips `<script>` and `<style>` tags, but
+  inline event handlers survive intact — `<p onclick="...">` and
+  `<img onerror="...">` both pass through unchanged. Since this HTML is stored
+  and later rendered into the recipe page, tag-stripping alone is not sufficient.
+  Sanitize on render, not on extract: doing it in both places would invite the
+  render layer to trust input it should not.
+
+- **Ingredient `rawText` and step text are untrusted third-party strings.** A
+  `<script>` element's text content survives into them as plain text. Render as
+  text, never via `dangerouslySetInnerHTML`.
+
+- **Deferred findings from the final review.** Each was verified by execution and
+  deliberately not fixed in this plan. None writes wrong data; all shape plan 2.
+
+  1. **Enrichment failure is invisible.** `applyEnrichment` and `fromLlm` swallow
+     every error and return unchanged input, and `ExtractedRecipe` carries no
+     field saying whether enrichment ran. A caller cannot distinguish "this
+     recipe legitimately has no parsed quantities" from "the enrichment call
+     429'd." The spec promises failures land in a visible queue, and the dry-run
+     migration report has nothing to report on. Over 156 sequential migration
+     calls a transient rate-limit is likely. **Add an `enrichmentApplied` flag or
+     an error channel before the migration runs.**
+  2. **`NoRecipeFoundError` conflates two causes.** `fromLlm` catches every
+     exception, so an LLM auth failure, a 429, or a timeout produces the same
+     error as a page that genuinely has no recipe. The needs-attention tray
+     cannot tell "retry, the model was down" from "this URL will never work" —
+     the one distinction it actually needs.
+  3. **`extract()` is bounded in bytes but not in time.** `@mozilla/readability`
+     is superlinear in block count: a 3 MB page of flat blocks measured
+     **101 seconds** of CPU (17,660 blocks → 51.6 s in Readability alone). The
+     3 MB fetch cap admits such a page. Under `waitUntil` on a platform timeout,
+     the job never completes and never reaches the tray. Add a time bound.
+  4. **`anthropic-client.ts` lives inside `lib/extract`**, which the spec
+     declares pure with no HTTP. The transitive import graph of `extract()` is
+     genuinely clean — verified — but nothing structurally prevents a future edit
+     from importing its neighbour. Move it to `lib/llm`.
+  5. **Enrichment is handed the answers.** The spec charters it to map the
+     source's raw `recipeCategory`/`recipeCuisine`/`keywords` onto the taxonomy,
+     but `enrich.ts` sends the already-normalized output of `normalizeTags`.
+     Every string `normalizeTag` missed is discarded before the model sees it —
+     on the Bolognese fixture that silently drops `pancetta`, `tagliatelle`,
+     `nut-free`, and `simmer`. Send the raw strings, and assert the payload in a
+     test.
+  6. **`normalizeTags` returns frozen singletons** shared across every recipe. A
+     Drizzle insert that attaches `recipeId` to a tag will throw. Return
+     defensive copies.
+  7. **The fetch size cap measures after buffering.** A chunked 40 MB response is
+     rejected, but only after peak RSS rises ~177 MB. Stream and cap, or correct
+     the comment to say what the guard actually does.
+  8. **RDFa is specified but not implemented** (spec: "Microdata / RDFa
+     fallback"). Either build it or amend the spec.
+  9. **Fixture publisher coverage is narrow** — three of five are Bon Appétit on
+     one CMS. Allrecipes and Simply Recipes, the two known 403 blockers whose
+     imports will route through the needs-attention path, have no parser
+     coverage at all. A 403 from a datacenter does not prevent saving the page
+     from a browser, so these fixtures can be created by hand.
+
+- **Serverless memory sizing.** JSDOM amplifies HTML roughly 300× in memory
+  (1 MB HTML → ~559 MB RSS). The fetch cap is set to 3 MB accordingly. If plan 2
+  processes imports in a background function, give it headroom and do not run
+  extractions concurrently in one instance.
+
+- **`narrativeHtml` requires attribute-level sanitization at the render layer.**
+  Measured during Task 7: Readability strips `<script>` and `<style>` tags, but
+  inline event handlers survive intact — `<p onclick="...">` and
+  `<img onerror="...">` both pass through unchanged. Since this HTML is stored
+  and later rendered into the recipe page, tag-stripping alone is not sufficient.
+  Sanitize on render, not on extract: doing it in both places would invite the
+  render layer to trust input it should not.

@@ -1,0 +1,358 @@
+import { describe, it, expect, vi } from 'vitest'
+import { extract, NoRecipeFoundError } from './index'
+import type { LlmClient } from './llm-types'
+
+const noopLlm: LlmClient = {
+  enrich: vi.fn().mockResolvedValue(null),
+  extractRecipe: vi.fn().mockResolvedValue(null),
+}
+
+const jsonLdPage = `<html><head><script type="application/ld+json">
+  {"@type":"Recipe","name":"Egg Korma","recipeIngredient":["2 eggs"],
+   "recipeInstructions":[{"@type":"HowToStep","text":"Boil the eggs."}],
+   "totalTime":"PT50M","recipeCategory":"Main Course"}
+</script></head><body>
+  <article><p>${'A long story about eggs that goes on for a while. '.repeat(12)}</p></article>
+</body></html>`
+
+describe('extract', () => {
+  it('uses JSON-LD when present', async () => {
+    const result = await extract({ url: 'https://example.com/korma', html: jsonLdPage, llm: noopLlm })
+    expect(result.title).toBe('Egg Korma')
+    expect(result.extractionMethod).toBe('jsonld')
+    expect(result.claimedTimeMinutes).toBe(50)
+  })
+
+  it('attaches the narrative separately from the recipe', async () => {
+    const result = await extract({ url: 'https://example.com/korma', html: jsonLdPage, llm: noopLlm })
+    expect(result.narrativeHtml).toContain('A long story about eggs')
+    expect(result.steps[0].text).toBe('Boil the eggs.')
+  })
+
+  it('falls back to the LLM when there is no structured data', async () => {
+    const llm: LlmClient = {
+      enrich: vi.fn().mockResolvedValue(null),
+      extractRecipe: vi.fn().mockResolvedValue({
+        title: 'Grandma Peanut Dip',
+        description: null,
+        author: null,
+        claimedTimeMinutes: 10,
+        servings: 4,
+        yieldText: '4 servings',
+        ingredients: ['1 cup peanuts'],
+        steps: ['Blend everything.'],
+      }),
+    }
+
+    const result = await extract({
+      url: 'https://example.com/dip',
+      html: '<html><body><article><p>No structured data here at all.</p></article></body></html>',
+      llm,
+    })
+
+    expect(result.title).toBe('Grandma Peanut Dip')
+    expect(result.extractionMethod).toBe('llm')
+    expect(result.ingredients[0].rawText).toBe('1 cup peanuts')
+    expect(llm.extractRecipe).toHaveBeenCalledOnce()
+  })
+
+  it('throws a NoRecipeFoundError when neither path finds a recipe', async () => {
+    await expect(
+      extract({ url: 'https://example.com/x', html: '<html><body>nothing</body></html>', llm: noopLlm }),
+    ).rejects.toThrow(/no recipe found/i)
+  })
+
+  it('never calls the LLM extractor when JSON-LD succeeds', async () => {
+    const llm: LlmClient = {
+      enrich: vi.fn().mockResolvedValue(null),
+      extractRecipe: vi.fn(),
+    }
+    await extract({ url: 'https://example.com/korma', html: jsonLdPage, llm })
+    expect(llm.extractRecipe).not.toHaveBeenCalled()
+  })
+
+  it('runs enrichment on the JSON-LD path', async () => {
+    const llm: LlmClient = {
+      enrich: vi.fn().mockResolvedValue({
+        description: 'A rich egg curry.',
+        tags: [{ facet: 'cuisine', value: 'indian' }],
+        ingredients: [{ position: 0, quantity: 2, unit: null, item: 'eggs', note: null }],
+      }),
+      extractRecipe: vi.fn(),
+    }
+
+    const result = await extract({ url: 'https://example.com/korma', html: jsonLdPage, llm })
+    expect(result.description).toBe('A rich egg curry.')
+    expect(result.tags).toContainEqual({ facet: 'cuisine', value: 'indian' })
+    expect(result.ingredients[0].quantity).toBe(2)
+  })
+
+  it('uses microdata when JSON-LD is absent, without calling the LLM', async () => {
+    const llm: LlmClient = {
+      enrich: vi.fn().mockResolvedValue(null),
+      extractRecipe: vi.fn(),
+    }
+    const html = `<html><body>
+      <div itemscope itemtype="http://schema.org/Recipe">
+        <h1 itemprop="name">KC Barbecue Sauce</h1>
+        <li itemprop="recipeIngredient">2 cups ketchup</li>
+      </div></body></html>`
+
+    const result = await extract({ url: 'https://example.com/sauce', html, llm })
+    expect(result.extractionMethod).toBe('microdata')
+    expect(llm.extractRecipe).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * The parsers only ever see `html`, so a page that writes its hero image as a
+ * relative path yields a bare path that no downstream image-downloader can use.
+ * The orchestrator knows the page URL, so it is the one place that can resolve
+ * every extraction path at once.
+ */
+describe('extract: hero image URL resolution', () => {
+  function jsonLdPageWithImage(image: unknown): string {
+    return `<html><head><script type="application/ld+json">${JSON.stringify({
+      '@type': 'Recipe',
+      name: 'Egg Korma',
+      image,
+      recipeIngredient: ['2 eggs'],
+      recipeInstructions: [{ '@type': 'HowToStep', text: 'Boil the eggs.' }],
+    })}</script></head><body><p>hi</p></body></html>`
+  }
+
+  async function heroFor(image: unknown, url = 'https://example.com/recipes/korma'): Promise<string | null> {
+    const result = await extract({ url, html: jsonLdPageWithImage(image), llm: noopLlm })
+    return result.heroImageUrl
+  }
+
+  it('passes an absolute URL through unchanged', async () => {
+    expect(await heroFor('https://cdn.example.org/img/korma.jpg')).toBe(
+      'https://cdn.example.org/img/korma.jpg',
+    )
+  })
+
+  it('resolves a root-relative path against the page URL', async () => {
+    expect(await heroFor('/img/korma.jpg')).toBe('https://example.com/img/korma.jpg')
+  })
+
+  it('resolves a document-relative path against the page URL', async () => {
+    expect(await heroFor('img/korma.jpg')).toBe('https://example.com/recipes/img/korma.jpg')
+  })
+
+  it('resolves a parent-relative path against the page URL', async () => {
+    expect(await heroFor('../img/korma.jpg', 'https://example.com/recipes/indian/korma')).toBe(
+      'https://example.com/recipes/img/korma.jpg',
+    )
+  })
+
+  it('resolves a protocol-relative URL to the page scheme', async () => {
+    expect(await heroFor('//cdn.example.com/korma.jpg', 'http://example.com/recipes/korma')).toBe(
+      'http://cdn.example.com/korma.jpg',
+    )
+    expect(await heroFor('//cdn.example.com/korma.jpg', 'https://example.com/recipes/korma')).toBe(
+      'https://cdn.example.com/korma.jpg',
+    )
+  })
+
+  it('passes a data: URI through unchanged', async () => {
+    const dataUri = 'data:image/gif;base64,R0lGODlhAQABAAAAACw='
+    expect(await heroFor(dataUri)).toBe(dataUri)
+  })
+
+  it('yields null for a value that cannot be resolved', async () => {
+    expect(await heroFor('http://')).toBeNull()
+  })
+
+  it('leaves a missing image as null', async () => {
+    expect(await heroFor(undefined)).toBeNull()
+  })
+
+  /**
+   * `new URL` validates syntax, not scheme, so these resolve happily and would be
+   * stored verbatim. Nothing renders the field yet, which is precisely why the
+   * allowlist is cheap to add now.
+   */
+  it('rejects a javascript: image URL', async () => {
+    expect(await heroFor('javascript:alert(1)')).toBeNull()
+  })
+
+  it('rejects a file: image URL', async () => {
+    expect(await heroFor('file:///etc/passwd')).toBeNull()
+  })
+
+  it('rejects other non-web schemes', async () => {
+    expect(await heroFor('vbscript:msgbox(1)')).toBeNull()
+    expect(await heroFor('blob:https://example.com/9d7b')).toBeNull()
+  })
+
+  it('resolves a relative microdata image too', async () => {
+    const html = `<html><body>
+      <div itemscope itemtype="http://schema.org/Recipe">
+        <h1 itemprop="name">KC Barbecue Sauce</h1>
+        <img itemprop="image" src="/img/sauce.jpg">
+        <li itemprop="recipeIngredient">2 cups ketchup</li>
+      </div></body></html>`
+
+    const result = await extract({ url: 'https://example.com/bbq/sauce', html, llm: noopLlm })
+    expect(result.heroImageUrl).toBe('https://example.com/img/sauce.jpg')
+  })
+})
+
+/**
+ * `fromJsonLd` never returns null: `{"@type":"Recipe"}` with no content still
+ * yields a recipe titled "Untitled recipe". Without a usability guard the `??`
+ * chain stops on that stub, so microdata and the LLM never run and an empty
+ * recipe is stored looking successfully extracted -- a permanent silent hole in
+ * the user's library rather than a visible failure.
+ */
+describe('extract: stub structured data does not short-circuit the chain', () => {
+  const stubJsonLd = `<script type="application/ld+json">{"@type":"Recipe"}</script>`
+
+  const microdataCard = `<div itemscope itemtype="http://schema.org/Recipe">
+      <h1 itemprop="name">KC Barbecue Sauce</h1>
+      <li itemprop="recipeIngredient">2 cups ketchup</li>
+    </div>`
+
+  it('falls through a stub JSON-LD node to a real microdata card', async () => {
+    // The shape a WordPress SEO plugin produces: a content-free Recipe node in
+    // the head while the actual recipe lives in the WPRM microdata card.
+    const html = `<html><head>${stubJsonLd}</head><body>${microdataCard}</body></html>`
+
+    const result = await extract({ url: 'https://example.com/sauce', html, llm: noopLlm })
+    expect(result.extractionMethod).toBe('microdata')
+    expect(result.title).toBe('KC Barbecue Sauce')
+    expect(result.ingredients[0].rawText).toBe('2 cups ketchup')
+  })
+
+  it('falls through a stub JSON-LD node to the LLM when there is no microdata', async () => {
+    const llm: LlmClient = {
+      enrich: vi.fn().mockResolvedValue(null),
+      extractRecipe: vi.fn().mockResolvedValue({
+        title: 'Grandma Peanut Dip',
+        description: null,
+        author: null,
+        claimedTimeMinutes: 10,
+        servings: 4,
+        yieldText: '4 servings',
+        ingredients: ['1 cup peanuts'],
+        steps: ['Blend everything.'],
+      }),
+    }
+    const html = `<html><head>${stubJsonLd}</head><body><p>A story, no recipe markup.</p></body></html>`
+
+    const result = await extract({ url: 'https://example.com/dip', html, llm })
+    expect(result.extractionMethod).toBe('llm')
+    expect(result.title).toBe('Grandma Peanut Dip')
+    expect(llm.extractRecipe).toHaveBeenCalledOnce()
+  })
+
+  /**
+   * `fromMicrodata` already rejects a nameless scope, but has the same hole one
+   * level down: a scope with a name and nothing else.
+   */
+  it('falls through a named but empty microdata scope', async () => {
+    const llm: LlmClient = {
+      enrich: vi.fn().mockResolvedValue(null),
+      extractRecipe: vi.fn().mockResolvedValue(null),
+    }
+    const html = `<html><body>
+      <div itemscope itemtype="http://schema.org/Recipe"><h1 itemprop="name">Mystery Dish</h1></div>
+    </body></html>`
+
+    await expect(extract({ url: 'https://example.com/x', html, llm })).rejects.toThrow(
+      /no recipe found/i,
+    )
+    expect(llm.extractRecipe).toHaveBeenCalledOnce()
+  })
+
+  it('still throws when every path comes back empty', async () => {
+    const html = `<html><head>${stubJsonLd}</head><body><p>nothing here</p></body></html>`
+
+    await expect(extract({ url: 'https://example.com/x', html, llm: noopLlm })).rejects.toThrow(
+      NoRecipeFoundError,
+    )
+  })
+
+  /**
+   * Ingredients OR steps, never AND. A spice blend is a list of ingredients with
+   * nothing to do; both halves exist in the wild, and only neither-nor is a
+   * non-recipe.
+   */
+  it('accepts a recipe with ingredients but no steps', async () => {
+    const html = `<html><head><script type="application/ld+json">
+      {"@type":"Recipe","name":"House Spice Blend","recipeIngredient":["2 Tbsp. cumin","1 Tbsp. coriander"]}
+    </script></head><body><p>hi</p></body></html>`
+
+    const result = await extract({ url: 'https://example.com/blend', html, llm: noopLlm })
+    expect(result.extractionMethod).toBe('jsonld')
+    expect(result.title).toBe('House Spice Blend')
+    expect(result.steps).toHaveLength(0)
+    expect(result.ingredients).toHaveLength(2)
+  })
+
+  it('accepts a recipe with steps but no ingredients', async () => {
+    const html = `<html><head><script type="application/ld+json">
+      {"@type":"Recipe","name":"How to Temper Chocolate",
+       "recipeInstructions":[{"@type":"HowToStep","text":"Melt two thirds of the chocolate."}]}
+    </script></head><body><p>hi</p></body></html>`
+
+    const result = await extract({ url: 'https://example.com/temper', html, llm: noopLlm })
+    expect(result.extractionMethod).toBe('jsonld')
+    expect(result.ingredients).toHaveLength(0)
+    expect(result.steps).toHaveLength(1)
+  })
+})
+
+/**
+ * The narrative fix has two independent halves: the publisher/plugin selector
+ * list in narrative.ts, and de-duplication against the already-extracted recipe
+ * body. Each half masks the other in the existing fixture tests -- the selectors
+ * catch every real fixture's markup, so nothing pins that `extract()` actually
+ * passes the recipe body through to `extractNarrative`. This page uses no known
+ * recipe-card selector (a plain, unclassed `<div>`) so only the body-dedupe path
+ * can strip the duplicated step -- if `extract()` ever stops passing the recipe
+ * body, this test (and only this test) catches it.
+ */
+describe('extract: wires the recipe body into narrative de-duplication', () => {
+  const STEP_TEXT =
+    'Whisk the eggs with the sugar until the mixture is pale and roughly doubled in volume.'
+
+  const html = `<html><head><script type="application/ld+json">
+    {"@type":"Recipe","name":"Egg Korma","recipeIngredient":["2 eggs"],
+     "recipeInstructions":[{"@type":"HowToStep","text":"${STEP_TEXT}"}]}
+  </script></head><body>
+    <article>
+      <p>${'This dish has been in my family for generations, passed down through countless '.repeat(4)}Sunday mornings.</p>
+      <div>${STEP_TEXT}</div>
+    </article>
+  </body></html>`
+
+  it('strips prose that duplicates the extracted recipe body even with no recognized card selector', async () => {
+    const result = await extract({ url: 'https://example.com/korma', html, llm: noopLlm })
+
+    expect(result.steps[0].text).toBe(STEP_TEXT)
+    expect(result.narrativeHtml).not.toBeNull()
+    expect(result.narrativeHtml).not.toContain(STEP_TEXT)
+  })
+})
+
+/**
+ * `sumTimes` in jsonld.ts falls back to prepTime + cookTime only when
+ * totalTime is absent. Exercised through `extract()` rather than by importing
+ * `fromJsonLd`/`sumTimes` directly, since jsonld.ts is owned by another agent
+ * concurrently.
+ */
+describe('extract: claimedTimeMinutes falls back to prepTime + cookTime', () => {
+  it('sums prepTime and cookTime when totalTime is absent', async () => {
+    const html = `<html><head><script type="application/ld+json">
+      {"@type":"Recipe","name":"Egg Korma","recipeIngredient":["2 eggs"],
+       "recipeInstructions":[{"@type":"HowToStep","text":"Boil the eggs."}],
+       "prepTime":"PT15M","cookTime":"PT35M"}
+    </script></head><body><p>hi</p></body></html>`
+
+    const result = await extract({ url: 'https://example.com/korma', html, llm: noopLlm })
+    expect(result.claimedTimeMinutes).toBe(50)
+  })
+})
+
