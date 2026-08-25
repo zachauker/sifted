@@ -19,8 +19,10 @@ function job(overrides: Partial<Job> = {}): Job {
     error: null,
     recipeId: null,
     requestedBy: null,
-    createdAt: new Date(counter),
-    finishedAt: new Date(counter),
+    // Recent by default. A job dated 1970 reads as a stale `running` row, and
+    // the tray deliberately treats those differently — see the stale test below.
+    createdAt: new Date(Date.now() - counter),
+    finishedAt: new Date(Date.now() - counter),
     ...overrides,
   }
 }
@@ -101,6 +103,24 @@ describe('the needs-attention tray', () => {
     render(<NeedsAttentionTray jobs={[job({ status: 'running', failureKind: null, error: null })]} />)
     expect(screen.getByText('In progress')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /retry/i })).not.toBeInTheDocument()
+  })
+
+  it('a long-stale running job offers the retry that clears it', () => {
+    // A function killed at its time limit leaves the row on `running` with
+    // nothing alive to record the failure. Without an action here the row says
+    // "in progress" forever and its URL cannot be re-imported.
+    render(
+      <NeedsAttentionTray
+        jobs={[job({
+          status: 'running',
+          failureKind: null,
+          error: null,
+          createdAt: new Date(Date.now() - 30 * 60 * 1000),
+        })]}
+      />,
+    )
+    expect(screen.getByText('Stopped partway')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument()
   })
 
   // `done` and `duplicate` jobs never reach this component: the tray is fed

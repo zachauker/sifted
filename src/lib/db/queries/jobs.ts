@@ -1,3 +1,4 @@
+import { STALE_RUNNING_MS } from '@/lib/jobs/staleness'
 import { and, desc, eq, gt, inArray, or, sql } from 'drizzle-orm'
 import type { Db } from '@/lib/db'
 import { importJobs } from '@/lib/db/schema'
@@ -238,7 +239,7 @@ export async function countJobsNeedingAttention(db: Db): Promise<number> {
  * any legitimate duration keeps that a rare, not a routine, event, while still
  * recovering well within a user's patience for "why is this stuck".
  */
-const STALE_RUNNING_MS = 5 * 60 * 1000
+
 
 /**
  * Finds an import already under way for a canonical URL.
@@ -285,3 +286,4 @@ export async function findInFlightJob(db: Db, url: string) {
     )
     .get()
 }
+

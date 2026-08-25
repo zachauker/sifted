@@ -3,6 +3,7 @@
 import { useId, useState, type ReactNode } from 'react'
 import { explainFailure } from './failure-copy'
 import type { Job } from './types'
+import { isStaleRunning } from '@/lib/jobs/staleness'
 
 /**
  * Mirrors `MAX_BYTES` in `@/lib/fetch`, which the retry endpoint enforces
@@ -193,6 +194,23 @@ function CardShell({ url, children }: { url: string; children: ReactNode }) {
 
 export function JobCard({ job, onDismiss }: { job: Job; onDismiss: (id: string) => void }) {
   if (job.status === 'running') {
+    // An import that claims to be running long after any import could still be
+    // running was killed mid-flight, and nothing is left alive to record the
+    // failure. Without an action here the row sits saying "in progress"
+    // forever, so offer the retry that clears it.
+    if (isStaleRunning(job)) {
+      return (
+        <CardShell url={job.url}>
+          <p className="mt-1 font-medium">Stopped partway</p>
+          <p className="mt-1 text-sm text-neutral-600 dark:text-neutral-400">
+            This import started a while ago and never finished — it was most
+            likely cut short. Nothing was saved. Retrying starts it again.
+          </p>
+          <RetryButton jobId={job.id} label="Retry" />
+        </CardShell>
+      )
+    }
+
     return (
       <CardShell url={job.url}>
         <p className="mt-1 font-medium">In progress</p>
