@@ -8,7 +8,7 @@ import { cleanup, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import '@testing-library/jest-dom/vitest'
 import type { LibraryEntry } from '@/lib/db/queries/library'
-import { EMPTY_FILTER_STATE } from '@/lib/library/filter'
+import { EMPTY_FILTER_STATE, parseFilterState } from '@/lib/library/filter'
 import { LibraryView } from '@/components/library/library-view'
 
 afterEach(cleanup)
@@ -185,5 +185,44 @@ describe('the empty states', () => {
   it('says the library is empty rather than rendering nothing at all', () => {
     renderLibrary([])
     expect(screen.getByText(/nothing in the library yet/i)).toBeInTheDocument()
+  })
+})
+
+describe('the URL', () => {
+  it('carries the filters, so a narrowed view can be reloaded or shared', async () => {
+    renderLibrary([
+      entry({ title: 'Salmon Traybake', tags: ['course:main', 'ingredient:seafood'] }),
+      entry({ title: 'Brownies', tags: ['course:dessert'] }),
+    ])
+
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Seafood, 1 recipe' }))
+    await userEvent.selectOptions(screen.getByLabelText('Sort'), 'Highest rated')
+
+    expect(window.location.search).toBe('?f=ingredient%3Aseafood&sort=rating')
+  })
+
+  it('reads that URL back into the same view', () => {
+    render(
+      <LibraryView
+        entries={[
+          entry({ title: 'Salmon Traybake', tags: ['course:main', 'ingredient:seafood'] }),
+          entry({ title: 'Brownies', tags: ['course:dessert'] }),
+        ]}
+        initialState={parseFilterState({ f: 'ingredient:seafood', sort: 'rating' })}
+      />,
+    )
+
+    expect(cardTitles()).toEqual(['Salmon Traybake'])
+    expect(screen.getByRole('checkbox', { name: 'Seafood, 1 recipe' })).toBeChecked()
+  })
+
+  it('leaves a clean URL behind when the filters are cleared', async () => {
+    renderLibrary([entry({ title: 'Brownies', tags: ['course:dessert'] })])
+
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Dessert, 1 recipe' }))
+    expect(window.location.search).not.toBe('')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Clear all' }))
+    expect(window.location.search).toBe('')
   })
 })
