@@ -1,4 +1,4 @@
-import { desc, eq } from 'drizzle-orm'
+import { desc, eq, sql } from 'drizzle-orm'
 import type { Db } from '@/lib/db'
 import { importJobs } from '@/lib/db/schema'
 
@@ -115,15 +115,34 @@ export async function markFailed(
 }
 
 /**
- * Newest first. `createdAt` is stored with second resolution, so several jobs
- * queued from one share sheet can tie; `id` breaks the tie so the order is at
- * least stable across calls, which is what a paged list needs.
+ * Newest first, and genuinely so.
+ *
+ * `createdAt` is an INTEGER of *seconds*, so every job queued in the same
+ * second ties — which is the normal case, not an edge case: a share sheet
+ * queues several at once, an import and the duplicate that follows it land
+ * milliseconds apart, and the migration replays 156 imports in a burst. The
+ * previous tiebreak was `id DESC`, and cuid2 ids are deliberately not lexically
+ * time-ordered (that is the point of the hash in them), so within a tied second
+ * the order was effectively random. Observed: an import and its immediately
+ * following duplicate came back oldest-first, and "the newest 50" of 156 jobs
+ * created in a burst is an arbitrary 50.
+ *
+ * `rowid` is SQLite's own monotonically increasing insertion counter, so it is
+ * exactly the chronological order we mean, at no storage cost and with no
+ * migration — the alternative, widening `created_at` to `timestamp_ms`, is a
+ * schema change plus a backfill that would still tie under a burst of inserts
+ * inside one millisecond. `import_jobs` has a TEXT primary key and is not
+ * WITHOUT ROWID, so the column is there.
+ *
+ * `createdAt` stays as the leading key so the visible ordering still follows
+ * the timestamps the tray displays; `rowid` only decides what the timestamps
+ * cannot.
  */
 export async function listJobs(db: Db, limit = 50) {
   return db
     .select()
     .from(importJobs)
-    .orderBy(desc(importJobs.createdAt), desc(importJobs.id))
+    .orderBy(desc(importJobs.createdAt), sql`${importJobs}.rowid desc`)
     .limit(limit)
 }
 

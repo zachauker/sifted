@@ -164,6 +164,18 @@ function classify(error: unknown): FailureKind {
  * key, because the row that points at the blob also stores `sourceUrl`.
  * The domain prefix is purely so a human browsing the bucket can tell what
  * they are looking at.
+ *
+ * Being a pure function of the canonical URL is also what makes a *failed*
+ * job's archive findable with no schema change: there is no recipe row to point
+ * at the blob, but `import_jobs.url` holds the canonical URL the job was
+ * created with, and re-deriving the key from it lands on the same blob.
+ *
+ * One caveat, and it is the redirect case: when the fetch redirects, the key is
+ * derived from `page.finalUrl` while the job row still holds the URL the user
+ * shared. For those jobs the key has to be recovered by re-resolving the
+ * redirect (or by browsing the domain prefix), not by hashing `import_jobs.url`
+ * directly. Recording the resolved URL on the job would fix it and needs a
+ * column, so it is left for whoever needs it.
  */
 function archiveKey(canonicalUrl: string, domain: string): string {
   const digest = createHash('sha256').update(canonicalUrl).digest('hex')
@@ -276,6 +288,40 @@ export async function runImport(input: RunImportInput): Promise<void> {
       return
     }
 
+    // Archive the bytes the server actually sent, gzipped — never a re-encode
+    // of `page.html`. A re-encode is lossy the moment the decode was wrong, and
+    // would bake today's charset bugs permanently into every future
+    // re-extraction. `page.encoding` rides along on the recipe so a later pass
+    // can tell a declared decode from a guessed one.
+    //
+    // Before extraction, not after, and that ordering is the whole point of the
+    // archive. `no_recipe`, a blown extraction budget and `EnrichmentRegression`
+    // all abandon the run *after* this line — and those are precisely the pages
+    // worth keeping. A page the parser could not read is the best possible test
+    // fixture for the next version of the parser, and discarding bytes we
+    // already hold in memory makes it unrecoverable except by re-fetching a page
+    // that may be gone, paywalled, or blocking us. It also means a user who
+    // pasted HTML by hand to recover a `blocked` job does not have to go and
+    // paste it a second time when extraction then fails.
+    //
+    // Placed after the duplicate short-circuit rather than before it, on
+    // purpose. The blob and the recipe row are a matched pair: the row's
+    // `sourceEncoding` describes how *these* bytes decode, and its
+    // `archivedHtmlKey` names them. Writing the blob on a path that returns
+    // without touching the row would overwrite a good archive with bytes no row
+    // describes — a re-share of a known link, fetched a year later, is as likely
+    // to be a paywall stub or a 404 body as the article, and it would silently
+    // replace the copy the recipe was actually built from. The duplicate path is
+    // also the one path that exists purely to skip work, and a gzip plus a blob
+    // PUT of up to 3 MB is not free. Every path that goes on to write the recipe
+    // archives first, which is what the fix is for.
+    //
+    // The key is a pure function of the canonical URL, which is only knowable
+    // once the fetch has resolved redirects — so this sits after the fetch and
+    // uses `canonical.url`, never the URL the job was created with.
+    const key = archiveKey(canonical.url, canonical.domain)
+    await store.put(key, new Uint8Array(await gzipAsync(page.bytes)), 'application/gzip')
+
     // `extract` resolves relative image references against this, so it gets the
     // URL the bytes actually came from rather than the tracking-stripped one:
     // stripping is right for storage and dedupe, but the base for resolving a
@@ -304,19 +350,12 @@ export async function runImport(input: RunImportInput): Promise<void> {
       throw new EnrichmentRegressionError(canonical.url)
     }
 
-    // Archive the bytes the server actually sent, gzipped — never a re-encode
-    // of `page.html`. A re-encode is lossy the moment the decode was wrong, and
-    // would bake today's charset bugs permanently into every future
-    // re-extraction. `page.encoding` rides along on the recipe so a later pass
-    // can tell a declared decode from a guessed one.
-    const key = archiveKey(canonical.url, canonical.domain)
-    await store.put(key, new Uint8Array(await gzipAsync(page.bytes)), 'application/gzip')
-
-    // Deliberately before `upsertRecipe`: if the blob write fails after the row
-    // was written, the recipe would claim an archive that does not exist, and
-    // nothing would ever discover that until a re-extraction years from now.
-    // The opposite order fails safe — a blob nobody references is inert, costs
-    // a few kilobytes, and is overwritten by the next import of the same URL.
+    // The archive above is deliberately written before this row: if the blob
+    // write failed after the row was written, the recipe would claim an archive
+    // that does not exist, and nothing would ever discover that until a
+    // re-extraction years from now. The opposite order fails safe — a blob
+    // nobody references is inert, costs a few kilobytes, and is overwritten by
+    // the next import of the same URL.
     const recipeId = await upsertRecipe(db, {
       extracted,
       sourceUrl: canonical.url,

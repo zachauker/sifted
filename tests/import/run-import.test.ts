@@ -553,3 +553,112 @@ describe('runImport: dedupe happens on the post-redirect canonical URL', () => {
     expect(job?.recipeId).toBe(recipe.id)
   })
 })
+
+/**
+ * The archive is written before extraction, not after, and that ordering is the
+ * entire payoff of `archived_html_key`. "Improve the parser, re-run every
+ * recipe offline" is void for exactly the pages you would most want to re-run,
+ * if a page the parser could not read is the one page whose bytes get thrown
+ * away.
+ */
+describe('runImport: the page is archived before extraction can fail', () => {
+  /** The one blob under `archives/`, gunzipped. Fails loudly if there isn't exactly one. */
+  async function archivedBytes(): Promise<Buffer> {
+    const keys = store.keys().filter((k) => k.startsWith('archives/'))
+    expect(keys).toHaveLength(1)
+    const blob = await store.get(keys[0])
+    expect(blob).not.toBeNull()
+    return Buffer.from(gunzipSync(Buffer.from(blob!)))
+  }
+
+  it('keeps the archived page when the extraction finds no recipe', async () => {
+    const jobId = await newJob()
+    const page = fetchedPage(PLAIN_HTML)
+    const llm = fakeLlm({ async extractRecipe() { return { nothing: true } } })
+
+    await runImport({
+      db, store, llm, jobId, url: SOURCE_URL,
+      fetchPage: fakeFetch(page), ingestHeroImage: fakeIngest(),
+    })
+
+    const job = await getJob(db, jobId)
+    expect(job?.status).toBe('failed')
+    expect(job?.failureKind).toBe('no_recipe')
+    expect(await db.select().from(recipes)).toHaveLength(0)
+
+    // The point: no recipe row exists to point at this blob, and the bytes are
+    // still there anyway. This is the page that becomes the next parser's test
+    // fixture, and re-fetching it later may be impossible.
+    expect(await archivedBytes()).toEqual(Buffer.from(page.bytes))
+  })
+
+  it('keeps the pasted HTML when a recovered blocked job then fails to extract', async () => {
+    const jobId = await newJob()
+    const llm = fakeLlm({ async extractRecipe() { return { nothing: true } } })
+
+    // The recovery path for a `blocked` publisher: the user captured the page
+    // on their phone and pasted it in. There is no second copy anywhere.
+    await runImport({
+      db, store, llm, jobId, url: SOURCE_URL,
+      suppliedHtml: PLAIN_HTML,
+      fetchPage: fakeFetch(() => { throw new Error('fetchPage must not be called') }),
+      ingestHeroImage: fakeIngest(),
+    })
+
+    expect((await getJob(db, jobId))?.failureKind).toBe('no_recipe')
+    // Without this the user has to go and paste the same page a second time.
+    expect(await archivedBytes()).toEqual(Buffer.from(PLAIN_HTML, 'utf8'))
+  })
+
+  it('keeps the archived page when enrichment would regress an existing recipe', async () => {
+    const jobId = await newJob()
+    const shared = {
+      db, store, jobId, url: SOURCE_URL,
+      fetchPage: fakeFetch(fetchedPage(recipeHtml())),
+      ingestHeroImage: fakeIngest(),
+    }
+
+    await runImport({ ...shared, llm: fakeLlm() })
+
+    const revised = recipeHtml().replace(/8 oz. wheat noodles/, '8 oz. soba noodles')
+    const revisedPage = fetchedPage(revised)
+
+    await runImport({
+      ...shared,
+      fetchPage: fakeFetch(revisedPage),
+      allowExistingUpdate: true,
+      llm: fakeLlm({ async enrich() { throw new Error('429 rate limited') } }),
+    })
+
+    expect((await getJob(db, jobId))?.failureKind).toBe('llm_failed')
+    // The recipe row was correctly left alone, but the newer bytes are kept:
+    // they are what a later re-extraction with a working model should read.
+    expect(await archivedBytes()).toEqual(Buffer.from(revisedPage.bytes))
+  })
+
+  it('does not overwrite an existing archive on the duplicate short-circuit', async () => {
+    const jobId = await newJob()
+    const original = fetchedPage(recipeHtml())
+
+    await runImport({
+      db, store, llm: fakeLlm(), jobId, url: SOURCE_URL,
+      fetchPage: fakeFetch(original), ingestHeroImage: fakeIngest(),
+    })
+
+    // A re-share of a link we already have, a year later, when the URL now
+    // serves a paywall stub. The archive key is a pure function of the
+    // canonical URL, so archiving before the dedupe check would replace the
+    // article with the stub — and the recipe row's `sourceEncoding` would then
+    // describe bytes that are gone.
+    const stub = '<!doctype html><html><body><p>Subscribe to continue.</p></body></html>'
+    const laterJob = await newJob()
+
+    await runImport({
+      db, store, llm: fakeLlm(), jobId: laterJob, url: SOURCE_URL,
+      fetchPage: fakeFetch(fetchedPage(stub)), ingestHeroImage: fakeIngest(),
+    })
+
+    expect((await getJob(db, laterJob))?.status).toBe('duplicate')
+    expect(await archivedBytes()).toEqual(Buffer.from(original.bytes))
+  })
+})

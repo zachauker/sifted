@@ -27,6 +27,46 @@ export async function findBySourceUrl(db: Db, sourceUrl: string) {
   return db.select().from(recipes).where(eq(recipes.sourceUrl, sourceUrl)).get()
 }
 
+/**
+ * Every recipe stored without the model's contribution: no parsed quantities,
+ * no units, no items, and no tags.
+ *
+ * This is the consumer that makes `enrichment_applied` mean something. The flag
+ * is written on every import, but until now nothing ever read it, and a flag
+ * nobody reads is a comment that costs a column. The failure it exists to
+ * surface is quiet by construction: `applyEnrichment` swallows its own errors
+ * by design, so a rate-limited model produces a recipe that stores cleanly,
+ * reads fine on the page, and reports `done` — with zero tags and every
+ * quantity null. Nothing fails. Nobody is told. The only symptom is a faceted
+ * filter rail that under-counts, weeks later, with no failed job anywhere to
+ * explain it.
+ *
+ * The migration is exactly the shape that triggers it: 156 imports replayed in
+ * a burst, one sustained rate limit, and an arbitrary slice of the library
+ * lands unenriched. And the guard built to prevent enrichment loss cannot see
+ * it — `EnrichmentRegressionError` only fires when the stored recipe *already*
+ * has enrichment, so first-import damage is precisely the case it is blind to.
+ *
+ * Ordered oldest first so a repair pass works through the backlog in the order
+ * it accumulated. `sourceUrl` comes back because it is what a repair needs: a
+ * recipe with a source can be fixed by retrying its import, and one without a
+ * source (the handful imported from Notion) never can be, so seeing the null
+ * is the answer to "why is this one still here".
+ */
+export type UnenrichedRecipe = {
+  id: string
+  title: string
+  sourceUrl: string | null
+}
+
+export async function listUnenrichedRecipes(db: Db): Promise<UnenrichedRecipe[]> {
+  return db
+    .select({ id: recipes.id, title: recipes.title, sourceUrl: recipes.sourceUrl })
+    .from(recipes)
+    .where(eq(recipes.enrichmentApplied, false))
+    .orderBy(recipes.createdAt)
+}
+
 export async function upsertRecipe(db: Db, input: UpsertInput): Promise<string> {
   const { extracted } = input
 
