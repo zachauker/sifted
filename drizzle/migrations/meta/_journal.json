@@ -8,6 +8,13 @@
       "when": 1787678011820,
       "tag": "0000_salty_lord_hawal",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1787678182609,
+      "tag": "0001_recipes_fts",
+      "breakpoints": true
     }
   ]
 }
