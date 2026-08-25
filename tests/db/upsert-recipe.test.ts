@@ -156,4 +156,32 @@ describe('upsertRecipe', () => {
     const [row] = await db.select().from(recipes).where(eq(recipes.id, id))
     expect(row.sourceUrl).toBeNull()
   })
+
+  it('accepts a historical creation date for migrated recipes', async () => {
+    const createdAt = new Date('2019-11-09T15:04:05.000Z')
+    const id = await upsertRecipe(db, {
+      extracted, sourceUrl: 'https://x.com/old', sourceDomain: 'x.com', createdAt,
+    })
+    const [row] = await db.select().from(recipes).where(eq(recipes.id, id))
+    expect(row.createdAt.toISOString()).toBe(createdAt.toISOString())
+  })
+
+  it('does not move createdAt on a later re-import', async () => {
+    const createdAt = new Date('2019-11-09T15:04:05.000Z')
+    const url = 'https://x.com/old2'
+    await upsertRecipe(db, { extracted, sourceUrl: url, sourceDomain: 'x.com', createdAt })
+    await upsertRecipe(db, { extracted, sourceUrl: url, sourceDomain: 'x.com' })
+
+    const [row] = await db.select().from(recipes).where(eq(recipes.sourceUrl, url))
+    expect(row.createdAt.toISOString()).toBe(createdAt.toISOString())
+  })
+
+  it('still defaults createdAt to now when none is supplied', async () => {
+    const before = Date.now()
+    const id = await upsertRecipe(db, {
+      extracted, sourceUrl: 'https://x.com/new', sourceDomain: 'x.com',
+    })
+    const [row] = await db.select().from(recipes).where(eq(recipes.id, id))
+    expect(row.createdAt.getTime()).toBeGreaterThanOrEqual(before - 1000)
+  })
 })

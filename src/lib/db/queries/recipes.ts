@@ -3,6 +3,7 @@ import { createId } from '@paralleldrive/cuid2'
 import type { Db } from '@/lib/db'
 import { recipes, ingredients, steps, recipeTags } from '@/lib/db/schema'
 import type { ExtractedRecipe } from '@/lib/extract/types'
+import type { TagAssignment } from '@/lib/taxonomy'
 
 /**
  * The single write path for a recipe.
@@ -21,6 +22,11 @@ export type UpsertInput = {
   sourceEncoding?: string | null
   enrichmentApplied?: boolean
   addedBy?: string | null
+  // A historical save date for a migrated recipe (e.g. from Notion). Applied
+  // only on insert — see the note beside `sourceFields` below for why a
+  // re-import must never touch it. Omit to fall back to the column default of
+  // "now", which is correct for a fresh import.
+  createdAt?: Date
 }
 
 export async function findBySourceUrl(db: Db, sourceUrl: string) {
@@ -108,11 +114,19 @@ export async function upsertRecipe(db: Db, input: UpsertInput): Promise<string> 
       await tx.update(recipes).set(sourceFields).where(eq(recipes.id, existing.id))
       recipeId = existing.id
     } else {
+      // `createdAt` is validated here, not just accepted, because it comes from
+      // parsing a Notion timestamp string upstream: a bad parse should fail the
+      // import loudly rather than silently write a corrupt date that only shows
+      // up later when someone sorts the library by age.
+      if (input.createdAt !== undefined && Number.isNaN(input.createdAt.getTime())) {
+        throw new Error(`upsertRecipe: createdAt is an invalid Date (sourceUrl: ${input.sourceUrl ?? 'null'})`)
+      }
       const [row] = await tx.insert(recipes).values({
         ...sourceFields,
         slug: makeSlug(extracted.title),
         sourceUrl: input.sourceUrl,
         addedBy: input.addedBy ?? null,
+        ...(input.createdAt !== undefined ? { createdAt: input.createdAt } : {}),
       }).returning({ id: recipes.id })
       recipeId = row.id
     }
@@ -167,6 +181,47 @@ export async function upsertRecipe(db: Db, input: UpsertInput): Promise<string> 
     `)
 
     return recipeId
+  })
+}
+
+/**
+ * Layers Notion-only facts onto a recipe that `upsertRecipe` already wrote.
+ *
+ * Rating, status, and the original Notion tags cannot be produced by
+ * extraction — they only ever existed in Notion — so the migration applies
+ * them in a second pass after the import. That means this function must
+ * tolerate being run twice: a migration resumed after a crash will re-apply
+ * metadata to recipes it already touched. Tags rely on the
+ * `(recipe_id, facet, value)` unique constraint plus `onConflictDoNothing` for
+ * that; rating and status are plain overwrites, which are idempotent by
+ * construction.
+ *
+ * Wrapped in a transaction even though the function is independently
+ * idempotent (a crash between the two writes would leave a state a re-run
+ * heals): without it, a reader could observe the rating updated but the tags
+ * not yet added, and there's no reason to allow that when a transaction is
+ * free.
+ *
+ * No FTS re-index here. `upsertRecipe`'s FTS row indexes only
+ * title/ingredients/steps/notes/narrative (see the INSERT above) — tags were
+ * never part of the searchable text, so adding Notion tags cannot make that
+ * row stale.
+ */
+export async function applyNotionMetadata(
+  db: Db,
+  recipeId: string,
+  input: { rating: number | null; status: 'made_it' | 'want_to_make' | null; tags: TagAssignment[] },
+): Promise<void> {
+  await db.transaction(async (tx) => {
+    await tx.update(recipes)
+      .set({ rating: input.rating, status: input.status, updatedAt: new Date() })
+      .where(eq(recipes.id, recipeId))
+
+    if (input.tags.length > 0) {
+      await tx.insert(recipeTags)
+        .values(input.tags.map((t) => ({ recipeId, facet: t.facet, value: t.value })))
+        .onConflictDoNothing()
+    }
   })
 }
 
