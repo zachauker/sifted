@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { auth } from '@/lib/auth'
 import { db } from '@/lib/db'
 import { getJob, markFailed } from '@/lib/db/queries/jobs'
+import { isStaleRunning } from '@/lib/jobs/staleness'
 import { runImport } from '@/lib/import/run-import'
 import { createVercelBlobStore } from '@/lib/storage/vercel-blob'
 import type { BlobStore } from '@/lib/storage'
@@ -71,7 +72,10 @@ export async function POST(
   if (!job) {
     return NextResponse.json({ error: 'not found' }, { status: 404 })
   }
-  if (!RETRYABLE_STATUSES.has(job.status)) {
+  // A `running` job whose function was killed mid-flight never gets corrected
+  // by anything, so past the staleness bound it is dead rather than in flight —
+  // and retrying it is the only in-app way to clear it.
+  if (!RETRYABLE_STATUSES.has(job.status) && !isStaleRunning(job)) {
     return NextResponse.json(
       { error: `cannot retry a job with status ${job.status}` },
       { status: 409 },

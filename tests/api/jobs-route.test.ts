@@ -35,6 +35,7 @@ vi.mock('@/lib/images', () => ({ ingestHeroImage: mocks.ingestHeroImage }))
 // Route modules are imported after the mocks above are registered so they
 // resolve against the mocked modules rather than the real db/auth/etc.
 const { GET } = await import('@/app/api/jobs/route')
+const { GET: getJobRoute } = await import('@/app/api/jobs/[id]/route')
 const { POST: retry } = await import('@/app/api/jobs/[id]/retry/route')
 
 function makeRetryRequest(body?: unknown, opts: { raw?: string; empty?: boolean } = {}) {
@@ -71,6 +72,39 @@ describe('GET /api/jobs', () => {
     const res = await GET()
     expect(res.status).toBe(401)
     expect(mocks.listJobs).not.toHaveBeenCalled()
+  })
+})
+
+describe('GET /api/jobs/[id]', () => {
+  it("returns the job the poller already knows the id of, not a scan of listJobs' capped window", async () => {
+    mocks.getJob.mockResolvedValue({ id: 'job-1', status: 'running', url: 'https://example.com/korma' })
+    const res = await getJobRoute(new Request('https://app.example.com/api/jobs/job-1'), {
+      params: Promise.resolve({ id: 'job-1' }),
+    })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({
+      job: { id: 'job-1', status: 'running', url: 'https://example.com/korma' },
+    })
+    expect(mocks.getJob).toHaveBeenCalledWith(expect.anything(), 'job-1')
+    expect(mocks.listJobs).not.toHaveBeenCalled()
+  })
+
+  it('returns 404 with a null job when the id is unknown', async () => {
+    mocks.getJob.mockResolvedValue(undefined)
+    const res = await getJobRoute(new Request('https://app.example.com/api/jobs/missing'), {
+      params: Promise.resolve({ id: 'missing' }),
+    })
+    expect(res.status).toBe(404)
+    expect(await res.json()).toEqual({ job: null })
+  })
+
+  it('returns 401 when the caller is anonymous, before looking up the job', async () => {
+    mocks.auth.mockResolvedValue(null)
+    const res = await getJobRoute(new Request('https://app.example.com/api/jobs/job-1'), {
+      params: Promise.resolve({ id: 'job-1' }),
+    })
+    expect(res.status).toBe(401)
+    expect(mocks.getJob).not.toHaveBeenCalled()
   })
 })
 

@@ -1,6 +1,15 @@
+import { eq } from 'drizzle-orm'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createTestDb, type TestDb } from '../helpers/db'
-import { createJob, listJobs, markFailed } from '@/lib/db/queries/jobs'
+import { importJobs } from '@/lib/db/schema'
+import {
+  createJob,
+  findInFlightJob,
+  listJobs,
+  listJobsNeedingAttention,
+  markFailed,
+  markRunning,
+} from '@/lib/db/queries/jobs'
 
 let db: TestDb
 
@@ -75,5 +84,126 @@ describe('listJobs', () => {
     await markFailed(db, first, 'fetch_failed', new Error('HTTP 503'))
 
     expect((await listJobs(db)).map((j) => j.id)).toEqual([second, first])
+  })
+})
+
+describe('listJobsNeedingAttention', () => {
+  /**
+   * The regression this exists for: `listJobs(db, 50)` — the newest 50 rows
+   * of *every* status — is the wrong query for the needs-attention tray. The
+   * migration replays 156 imports in one burst; if an early one fails and
+   * fifty-plus later ones succeed, the failure falls out of "the newest 50"
+   * entirely, and the tray shows nothing wrong at the exact moment it
+   * matters most. Selecting on `status` directly, with no row cap, is the
+   * only way the row is guaranteed to still be there.
+   *
+   * Manually confirmed this fails against `listJobs(db, 50)`: swapping the
+   * call below to `listJobs(db, 50)` makes the `toContain(failedId)`
+   * assertion fail, because the 55 later successes push it out of the
+   * window.
+   */
+  it('finds a failed job even after 50+ newer jobs have since succeeded', async () => {
+    const failedId = await createJob(db, 'https://example.com/burnt-toast', null)
+    await markFailed(db, failedId, 'fetch_failed', new Error('HTTP 503'))
+
+    for (let i = 0; i < 55; i++) {
+      const id = await createJob(db, `https://example.com/fine-${i}`, null)
+      // Bypasses `markDone` on purpose: it requires a `recipeId`, and the FK
+      // it points at is irrelevant to what this test is about. Only the
+      // status matters here.
+      await db.update(importJobs).set({ status: 'done' }).where(eq(importJobs.id, id))
+    }
+
+    const attention = await listJobsNeedingAttention(db)
+    expect(attention.map((j) => j.id)).toContain(failedId)
+    expect(attention).toHaveLength(1)
+  })
+
+  it('includes running and queued jobs alongside failed ones, and excludes done and duplicate', async () => {
+    const failed = await createJob(db, 'https://example.com/a', null)
+    await markFailed(db, failed, 'no_recipe', new Error('nothing there'))
+
+    const running = await createJob(db, 'https://example.com/b', null)
+    await markRunning(db, running)
+
+    const queued = await createJob(db, 'https://example.com/c', null)
+
+    const done = await createJob(db, 'https://example.com/d', null)
+    await db.update(importJobs).set({ status: 'done' }).where(eq(importJobs.id, done))
+
+    const duplicate = await createJob(db, 'https://example.com/e', null)
+    await db.update(importJobs).set({ status: 'duplicate' }).where(eq(importJobs.id, duplicate))
+
+    const attention = await listJobsNeedingAttention(db)
+    expect(new Set(attention.map((j) => j.id))).toEqual(new Set([failed, running, queued]))
+  })
+
+  it('accepts an optional limit, for a caller that wants one', async () => {
+    for (let i = 0; i < 5; i++) {
+      const id = await createJob(db, `https://example.com/f${i}`, null)
+      await markFailed(db, id, 'internal', new Error('boom'))
+    }
+
+    expect(await listJobsNeedingAttention(db, 2)).toHaveLength(2)
+  })
+})
+
+describe('findInFlightJob', () => {
+  /**
+   * The wedge this whole describe block exists to escape.
+   *
+   * `run-import.ts` leaves a job on `running` "for a sweeper to reap" when
+   * even the failure write can't land — and no sweeper exists. With no age
+   * bound, `findInFlightJob` matches `running` forever: once a job is stuck
+   * there, both capture paths report `already_importing` for that URL for
+   * good, with no way in the product to clear it (no delete endpoint, retry
+   * 409s on `running`). Manually confirmed this reproduces against the
+   * pre-fix `findInFlightJob` (matching `queued|running` with no age bound):
+   * the "long-stale running job no longer blocks" case below failed, with
+   * the stale job still coming back from `findInFlightJob` after nine
+   * simulated minutes.
+   *
+   * `createdAt` is the only timestamp `markRunning` leaves behind — it
+   * clears `finishedAt` but sets nothing marking when the row *entered*
+   * `running` — and in the ordinary flow (create, then kick off `runImport`
+   * in the same request) it lands within milliseconds of that transition, so
+   * it stands in for "how long has this been running" here.
+   */
+  it('a recent running job still blocks a duplicate import', async () => {
+    const jobId = await createJob(db, 'https://example.com/fresh', null)
+    await markRunning(db, jobId)
+
+    const inFlight = await findInFlightJob(db, 'https://example.com/fresh')
+    expect(inFlight?.id).toBe(jobId)
+  })
+
+  it('a long-stale running job no longer blocks — it is not in flight, it is dead', async () => {
+    const jobId = await createJob(db, 'https://example.com/wedged', null)
+    await markRunning(db, jobId)
+
+    vi.advanceTimersByTime(9 * 60 * 1000)
+
+    const inFlight = await findInFlightJob(db, 'https://example.com/wedged')
+    expect(inFlight).toBeUndefined()
+  })
+
+  it('a queued job of any age still blocks — queued is retryable, not a wedge', async () => {
+    const jobId = await createJob(db, 'https://example.com/still-queued', null)
+
+    vi.advanceTimersByTime(9 * 60 * 1000)
+
+    const inFlight = await findInFlightJob(db, 'https://example.com/still-queued')
+    expect(inFlight?.id).toBe(jobId)
+  })
+
+  it('does not match a done, failed, or duplicate job regardless of age', async () => {
+    const done = await createJob(db, 'https://example.com/done', null)
+    await db.update(importJobs).set({ status: 'done' }).where(eq(importJobs.id, done))
+
+    const failed = await createJob(db, 'https://example.com/failed', null)
+    await markFailed(db, failed, 'fetch_failed', new Error('HTTP 503'))
+
+    expect(await findInFlightJob(db, 'https://example.com/done')).toBeUndefined()
+    expect(await findInFlightJob(db, 'https://example.com/failed')).toBeUndefined()
   })
 })

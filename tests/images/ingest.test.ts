@@ -61,6 +61,14 @@ describe('ingestHeroImage', () => {
     expect(store.keys().sort()).toEqual(
       ['recipes/rec123/hero-thumb.webp', 'recipes/rec123/hero.webp'],
     )
+
+    // Taken from what the store returned, not reconstructed from the key —
+    // the memory store's distinctive `memory://` scheme is what proves that.
+    // A real Vercel Blob URL is `https://<storeId>.public.blob.vercel-storage.com/<key>`,
+    // and `storeId` is not derivable from the key, so if this were built by
+    // string-concatenating the key it could never look like this.
+    expect(result!.blobUrl).toBe('memory://recipes/rec123/hero.webp')
+    expect(result!.thumbUrl).toBe('memory://recipes/rec123/hero-thumb.webp')
   })
 
   it('converts to webp', async () => {

@@ -5,7 +5,7 @@ import { db } from '@/lib/db'
 import { authenticateBearer } from '@/lib/api-auth'
 import { normalizeSourceUrl } from '@/lib/url'
 import { findBySourceUrl } from '@/lib/db/queries/recipes'
-import { createJob, markDuplicate, markFailed } from '@/lib/db/queries/jobs'
+import { createJob, findInFlightJob, markDuplicate, markFailed } from '@/lib/db/queries/jobs'
 import { runImport } from '@/lib/import/run-import'
 import { createVercelBlobStore } from '@/lib/storage/vercel-blob'
 import type { BlobStore } from '@/lib/storage'
@@ -96,6 +96,11 @@ export async function POST(request: Request) {
     canonical = normalizeSourceUrl(parsed.data.url)
   } catch {
     return NextResponse.json({ error: 'invalid url' }, { status: 400 })
+  }
+
+  const inFlight = await findInFlightJob(db, canonical.url)
+  if (inFlight) {
+    return NextResponse.json({ status: 'already_importing', jobId: inFlight.id }, { status: 202 })
   }
 
   const existing = await findBySourceUrl(db, canonical.url)

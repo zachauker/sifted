@@ -1,4 +1,5 @@
-import { desc, eq, sql } from 'drizzle-orm'
+import { STALE_RUNNING_MS } from '@/lib/jobs/staleness'
+import { and, desc, eq, gt, inArray, or, sql } from 'drizzle-orm'
 import type { Db } from '@/lib/db'
 import { importJobs } from '@/lib/db/schema'
 
@@ -149,3 +150,140 @@ export async function listJobs(db: Db, limit = 50) {
 export async function getJob(db: Db, jobId: string) {
   return db.select().from(importJobs).where(eq(importJobs.id, jobId)).get()
 }
+
+/**
+ * The rows the needs-attention tray actually needs — `failed`, `running`
+ * and `queued` — fetched directly, rather than sliced from `listJobs`'s
+ * newest N of *every* status.
+ *
+ * That slicing is the wrong query for this screen: the migration replays
+ * 156 imports in one burst, and if an early one fails while fifty-plus later
+ * ones succeed, `listJobs(db, 50)` no longer contains the failure at all —
+ * "the newest 50" is dominated by successes, and the tray that exists
+ * specifically to surface the failure shows nothing wrong. Filtering after
+ * the fact doesn't fix it either, because the failure was never in the page
+ * that got fetched. Selecting on `status` directly is the only way the row
+ * is guaranteed to be there.
+ *
+ * No default limit: the set this selects is bounded by how many imports are
+ * actually broken or in flight, which has nothing to do with how much
+ * traffic the app has ever seen, so there is no traffic-shaped number to cap
+ * it at. A caller that wants one may still pass one.
+ *
+ * Same ordering as `listJobs`, for the same reason: `created_at` only holds
+ * seconds, so a burst ties, and `rowid` is what breaks the tie correctly.
+ */
+export async function listJobsNeedingAttention(db: Db, limit?: number) {
+  const base = db
+    .select()
+    .from(importJobs)
+    .where(inArray(importJobs.status, ['failed', 'running', 'queued']))
+    .orderBy(desc(importJobs.createdAt), sql`${importJobs}.rowid desc`)
+  return limit === undefined ? base : base.limit(limit)
+}
+
+/**
+ * How many rows `listJobsNeedingAttention` would return, without fetching any
+ * of them.
+ *
+ * Exists for the header badge, which runs on every request through the app
+ * shell (`src/app/(app)/layout.tsx`) purely to answer "is there anything to
+ * look at" — it never renders a row, so pulling full `import_jobs` rows (as
+ * `listJobsNeedingAttention` or, worse, the unfiltered `listJobs` would) is
+ * pure waste on the most frequently executed query in the app. Same `WHERE`
+ * as `listJobsNeedingAttention`, on purpose: the badge and the tray must
+ * agree on what "needs attention" means, or the badge can show a count the
+ * tray doesn't back up (or vice versa).
+ *
+ * This — not `listJobs(db)` filtered client-side for `status === 'failed'` —
+ * is also the fix for the bug that motivated this function: `listJobs`
+ * defaults to the newest 50 rows of *every* status, so a failure sitting
+ * behind 50+ newer successes (the 156-recipe migration burst is exactly this
+ * shape) fell out of that window and the badge read 0 while the tray it was
+ * supposed to summarize still listed the failure. Selecting `count(*)` with
+ * the same status filter as the tray has no row cap to fall out of.
+ */
+export async function countJobsNeedingAttention(db: Db): Promise<number> {
+  const [row] = await db
+    .select({ count: sql<number>`count(*)` })
+    .from(importJobs)
+    .where(inArray(importJobs.status, ['failed', 'running', 'queued']))
+  return row?.count ?? 0
+}
+
+/**
+ * How long a `running` job may stay `running` before `findInFlightJob` stops
+ * treating it as in-flight.
+ *
+ * Bounded with reference to the same three budgets `run-import.ts` and every
+ * route that calls it already reason about: fetch (20s, `TIMEOUT_MS` in
+ * `@/lib/fetch`) + extraction (25s, `DEFAULT_EXTRACT_BUDGET_MS` in
+ * `run-import.ts`) + hero image ingestion (15s, `@/lib/images`) = 60s worst
+ * case, which is exactly why `maxDuration = 60` on `/api/import`,
+ * `/api/recipes/import` and the retry route. A genuinely in-flight import can
+ * never legitimately still be `running` much past that: the platform kills
+ * the function at 60s, and `runImport` never throws past its own `catch` (see
+ * its docstring), so the row either reaches `done`/`duplicate`/`failed`
+ * within that budget or the process is killed out from under it — which is
+ * precisely the wedge this bound exists to escape, since a kill mid-flight
+ * leaves the row on `running` with nothing left running to finish it.
+ *
+ * 5 minutes — 5x the 60s worst case — rather than a bound flush against the
+ * budget: cold starts, GC pauses and ordinary scheduling jitter can all push
+ * a legitimately-still-running function a little past its nominal budget
+ * before the platform's kill actually lands, and this is an escape hatch for
+ * a *dead* job, not a race against a live one. Treating a job that merely ran
+ * long as dead would let a second, wasteful (though not corrupting —
+ * `upsertRecipe` keys on `sourceUrl`) import start concurrently with one that
+ * was going to finish on its own; treating it as dead only once it is 5x past
+ * any legitimate duration keeps that a rare, not a routine, event, while still
+ * recovering well within a user's patience for "why is this stuck".
+ */
+
+
+/**
+ * Finds an import already under way for a canonical URL.
+ *
+ * Both capture paths dedupe against *existing recipes* before starting work,
+ * but that check cannot see an import that is still running — so sharing the
+ * same link twice in quick succession (a double tap on the share sheet, or
+ * both phones at once) fetches the page twice, pays for the model twice, and
+ * races two runImport calls at one row. `upsertRecipe` keys on `sourceUrl`, so
+ * nothing is corrupted, but the work and the spend are wasted and the tray
+ * gains a spurious job.
+ *
+ * `queued` matches at any age — it is retryable (the tray's retry button
+ * handles a `queued` job whose function apparently never ran), never
+ * wedged, and never the thing this function needs to look past. `running`
+ * only matches within `STALE_RUNNING_MS` of `createdAt` — see that constant
+ * for why a `running` row past that bound is being treated as dead rather
+ * than in flight. `createdAt` rather than a dedicated "entered running"
+ * column because `markRunning` sets no such column (only `error`,
+ * `failureKind` and `finishedAt` are cleared), and in the ordinary flow
+ * (create the row, then kick off `runImport` in the same request) the two
+ * land within milliseconds of each other, so `createdAt` stands in for it
+ * here without a schema change. The one flow where that proxy runs loose is
+ * a retry of an old `failed` job: it reuses the original `createdAt`, so a
+ * long-dormant job retried today reads as already-stale the instant it goes
+ * `running`. That does not reopen the wedge this function exists to close —
+ * it only means a concurrent capture of the same URL is no longer blocked
+ * during that retry, which is the same "wasteful, not corrupting" race this
+ * function already tolerates elsewhere.
+ */
+export async function findInFlightJob(db: Db, url: string) {
+  const staleBefore = new Date(Date.now() - STALE_RUNNING_MS)
+  return db
+    .select({ id: importJobs.id })
+    .from(importJobs)
+    .where(
+      and(
+        eq(importJobs.url, url),
+        or(
+          eq(importJobs.status, 'queued'),
+          and(eq(importJobs.status, 'running'), gt(importJobs.createdAt, staleBefore)),
+        ),
+      ),
+    )
+    .get()
+}
+

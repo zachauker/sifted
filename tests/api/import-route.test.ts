@@ -8,6 +8,7 @@ import { MAX_BYTES } from '@/lib/fetch'
  * ones (which would try to hit a database, Vercel Blob, and Anthropic).
  */
 const mocks = vi.hoisted(() => ({
+  findInFlightJob: vi.fn(),
   authenticateBearer: vi.fn(),
   findBySourceUrl: vi.fn(),
   createJob: vi.fn(),
@@ -25,6 +26,7 @@ vi.mock('@/lib/db', () => ({ db: { marker: 'db' } }))
 vi.mock('@/lib/db/queries/recipes', () => ({ findBySourceUrl: mocks.findBySourceUrl }))
 vi.mock('@/lib/db/queries/jobs', () => ({
   createJob: mocks.createJob,
+  findInFlightJob: mocks.findInFlightJob,
   markDuplicate: mocks.markDuplicate,
   markFailed: mocks.markFailed,
 }))
@@ -57,6 +59,7 @@ beforeEach(() => {
   mocks.authenticateBearer.mockResolvedValue({ userId: 'user-1', tokenId: 'token-1' })
   mocks.createJob.mockResolvedValue('job-1')
   mocks.findBySourceUrl.mockResolvedValue(undefined)
+  mocks.findInFlightJob.mockResolvedValue(undefined)
   mocks.runImport.mockResolvedValue(undefined)
   mocks.createVercelBlobStore.mockReturnValue({ store: true })
   mocks.createAnthropicClient.mockReturnValue({ llm: true })
@@ -242,5 +245,25 @@ describe('POST /api/import', () => {
       constructionError,
     )
     expect(res.status).toBe(202)
+  })
+})
+
+describe('POST /api/import — an import already under way', () => {
+  it('does not start a second import for a url already queued or running', async () => {
+    // Sharing the same link twice in quick succession — a double tap on the
+    // share sheet, or both phones at once — would otherwise fetch the page
+    // twice and pay for the model twice. The existing-recipe check cannot see
+    // this, because the first import has not written a recipe yet.
+    mocks.findInFlightJob.mockResolvedValue({ id: 'job-already-running' })
+
+    const response = await POST(makeRequest({ url: 'https://example.com/korma' }))
+
+    expect(response.status).toBe(202)
+    await expect(response.json()).resolves.toMatchObject({
+      status: 'already_importing',
+      jobId: 'job-already-running',
+    })
+    expect(mocks.createJob).not.toHaveBeenCalled()
+    expect(mocks.runImport).not.toHaveBeenCalled()
   })
 })

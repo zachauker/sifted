@@ -22,6 +22,13 @@
       "when": 1787687248900,
       "tag": "0002_wealthy_hydra",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1787692501966,
+      "tag": "0003_add_image_urls",
+      "breakpoints": true
     }
   ]
 }

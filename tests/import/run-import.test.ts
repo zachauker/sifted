@@ -107,6 +107,8 @@ function fakeFetch(page: FetchedPage | (() => never)) {
 const INGESTED: IngestedImage = {
   blobKey: 'recipes/x/hero.webp',
   thumbKey: 'recipes/x/hero-thumb.webp',
+  blobUrl: 'memory://recipes/x/hero.webp',
+  thumbUrl: 'memory://recipes/x/hero-thumb.webp',
   width: 1200,
   height: 800,
 }
@@ -225,6 +227,8 @@ describe('runImport', () => {
     expect(rows[0].role).toBe('source_hero')
     expect(rows[0].blobKey).toBe(INGESTED.blobKey)
     expect(rows[0].thumbKey).toBe(INGESTED.thumbKey)
+    expect(rows[0].blobUrl).toBe(INGESTED.blobUrl)
+    expect(rows[0].thumbUrl).toBe(INGESTED.thumbUrl)
     expect(rows[0].width).toBe(1200)
     expect(rows[0].height).toBe(800)
   })
