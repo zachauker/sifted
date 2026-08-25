@@ -5,11 +5,14 @@
  * found and repaired instead of quietly under-counting the filter rail forever.
  *
  * Usage:
- *   npx tsx scripts/list-unenriched.ts
+ *   npx tsx --env-file-if-exists=.env.local scripts/list-unenriched.ts
  *
- * (There is no npm script for it yet: `package.json` is being edited elsewhere.
- * The intended entry is `"unenriched": "tsx scripts/list-unenriched.ts"`, run as
- * `npm run unenriched`.)
+ * (There is no npm script for it yet: `package.json` was owned by another
+ * change while this was written. The intended entry, matching how `seed` and
+ * `token` are declared there, is
+ *   "unenriched": "tsx --env-file-if-exists=.env.local scripts/list-unenriched.ts"
+ * run as `npm run unenriched`. The env file is where `TURSO_DATABASE_URL`
+ * lives; without it this fails with an opaque LibsqlError.)
  *
  * Why this exists: `applyEnrichment` swallows its own errors on purpose, so a
  * rate-limited model produces a recipe that stores fine and a job that reports
