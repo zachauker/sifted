@@ -2869,6 +2869,30 @@ git commit -m "docs: add iOS Shortcut setup and record the deployed-fetch result
 - Enrichment failure produces a stored recipe with `enrichment_applied = false`, not a failed import.
 - The deployed-fetch answer for Bon Appétit is recorded.
 
+## Decisions made during execution
+
+Findings raised by implementers and deliberately declined, recorded so they are
+not silently re-raised or silently fixed later.
+
+- **A revoked token that is presented again leaves no trace.** `verifyToken`
+  filters on `revokedAt IS NULL`, so it returns null before stamping
+  `lastUsedAt`. Arguably a stolen phone still trying is the more interesting
+  security signal. Declined: there is no alerting or audit surface to consume
+  it, and recording a timestamp nobody reads is observability without a
+  consumer. Revisit only if an audit view is ever built.
+
+- **Text enums are enforced by TypeScript, not by SQLite CHECK constraints.**
+  `status`, `extractionMethod`, `facet`, `role`, and `failureKind` accept any
+  string from raw SQL or a bad cast. Declined: Drizzle generates no CHECK for
+  these, so adding them means hand-editing generated migrations, which then
+  drift from the schema snapshot and break future `db:generate`. Every write
+  goes through typed code, and the drift cost outweighs the residual risk for a
+  two-user app.
+
+- **`searchRecipes` sanitizes rather than the UI.** Raw input to FTS5 `MATCH`
+  throws on ordinary inputs — a bare `and`, a stray `(`. This is fixed at the
+  query layer, next to the table, rather than left for the search box in plan 3.
+
 ## Handoff to plan 3
 
 Plan 3 builds the UI (library grid with the filter rail, recipe page, needs-attention screens) and migrates the 156 Notion recipes.
