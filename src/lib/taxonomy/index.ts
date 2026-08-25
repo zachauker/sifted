@@ -30,6 +30,13 @@ export const VOCABULARY: Record<Exclude<Facet, 'tag'>, readonly string[]> = {
   cuisine: CUISINE_VALUES,
 }
 
+export function isValidTag(tag: TagAssignment): boolean {
+  if (!FACETS.includes(tag.facet)) return false
+  if (tag.facet === 'tag') return tag.value.length > 0
+  const vocab = VOCABULARY[tag.facet]
+  return vocab ? vocab.includes(tag.value) : false
+}
+
 // Object.create(null) so lookups can never resolve to an inherited
 // Object.prototype member (e.g. normalizeTag('constructor') or
 // normalizeTag('toString')) instead of a real miss.
@@ -39,7 +46,13 @@ const ALIASES: Record<string, TagAssignment | null> = Object.create(null) as Rec
 >
 
 function alias(facet: Facet, value: string, ...raws: string[]) {
-  for (const raw of raws) ALIASES[key(raw)] = { facet, value }
+  // Frozen so callers can never mutate the shared object normalizeTag hands
+  // back for every raw string that resolves to this facet/value pair.
+  const target: TagAssignment = Object.freeze({ facet, value })
+  if (!isValidTag(target)) {
+    throw new Error(`taxonomy: alias target ${facet}:${value} is not in the vocabulary`)
+  }
+  for (const raw of raws) ALIASES[key(raw)] = target
 }
 
 function drop(...raws: string[]) {
@@ -61,12 +74,15 @@ function hasKey(k: string): boolean {
 }
 
 // --- course -----------------------------------------------------------------
-alias('course', 'main', 'main', 'main course', 'main dish', 'entree', 'entrée', 'dinner recipes')
+alias(
+  'course', 'main',
+  'main', 'main course', 'main dish', 'entree', 'entrée', 'dinner recipes', 'dinner recipe',
+)
 alias('course', 'side', 'side', 'side dish', 'sides')
 alias(
   'course', 'appetizer',
   'appetizer', 'appetizers', 'starter', 'snack', 'snacks', 'party food', 'hors doeuvre',
-  'appetizers and snacks',
+  'appetizers and snacks', 'appetizer and snack',
 )
 alias('course', 'dessert', 'dessert', 'desserts', 'sweets', 'cake', 'cookies')
 alias('course', 'breakfast', 'breakfast', 'brunch', 'breakfast and brunch', 'breakfast brunch')
@@ -113,7 +129,7 @@ alias('cuisine', 'mediterranean', 'macedonian')
 alias('cuisine', 'middle-eastern', 'lebanese', 'turkish')
 
 // --- open tags (dish types with no dedicated facet) -------------------------
-alias('tag', 'soup', 'soup', 'soup stew', 'stew', 'chili', 'soups and stews')
+alias('tag', 'soup', 'soup', 'soup stew', 'stew', 'chili', 'soups and stews', 'soup and stew')
 alias('tag', 'salad', 'salad', 'salads')
 alias('tag', 'sandwich', 'sandwich', 'sandwhich', 'burger', 'wrap')
 alias('tag', 'meal-prep', 'meal prep')
@@ -139,26 +155,6 @@ drop(
 )
 
 /**
- * Every distinct, non-dropped TagAssignment registered in the alias table,
- * deduped. Exposed only so the test suite can assert a vocabulary invariant
- * (every alias target is a legal tag) — not part of the module's public
- * contract; do not import this from application code.
- */
-export const __ALIAS_TARGETS: readonly TagAssignment[] = (() => {
-  const seen = new Set<string>()
-  const out: TagAssignment[] = []
-  for (const k in ALIASES) {
-    const target = ALIASES[k]
-    if (!target) continue
-    const id = `${target.facet}:${target.value}`
-    if (seen.has(id)) continue
-    seen.add(id)
-    out.push(target)
-  }
-  return out
-})()
-
-/**
  * Maps a raw source string (a JSON-LD recipeCategory, a Notion tag, an LLM
  * suggestion) onto a facet and canonical value. Returns null when the string
  * is not food-related or carries no filtering information.
@@ -174,7 +170,7 @@ export const __ALIAS_TARGETS: readonly TagAssignment[] = (() => {
  *     plural alias like "cookies" — by appending "s"
  *     ("Soups" -> "soup", "Entrees" -> "entree", "Cookie" -> "cookies").
  */
-export function normalizeTag(raw: string): TagAssignment | null {
+export function normalizeTag(raw: string | null | undefined): TagAssignment | null {
   if (typeof raw !== 'string' || !raw) return null
   const k = key(raw)
   if (hasKey(k)) return ALIASES[k]
@@ -184,6 +180,10 @@ export function normalizeTag(raw: string): TagAssignment | null {
     return ALIASES[withoutRecipesSuffix]
   }
 
+  // Safe only because no two registered keys `a` and `a + 'e'` currently
+  // coexist — otherwise stripping "es" before "s" could match the wrong
+  // one. A future alias() addition that creates such a pair would need to
+  // account for this ordering; there is no test to catch it.
   if (k.endsWith('es') && hasKey(k.slice(0, -2))) return ALIASES[k.slice(0, -2)]
   if (k.endsWith('s') && hasKey(k.slice(0, -1))) return ALIASES[k.slice(0, -1)]
   if (hasKey(`${k}s`)) return ALIASES[`${k}s`]
@@ -191,15 +191,8 @@ export function normalizeTag(raw: string): TagAssignment | null {
   return null
 }
 
-export function isValidTag(tag: TagAssignment): boolean {
-  if (!FACETS.includes(tag.facet)) return false
-  if (tag.facet === 'tag') return tag.value.length > 0
-  const vocab = VOCABULARY[tag.facet]
-  return vocab ? vocab.includes(tag.value) : false
-}
-
 /** Normalizes a list of raw strings, dropping unrecognized entries and duplicates. */
-export function normalizeTags(raws: string[]): TagAssignment[] {
+export function normalizeTags(raws: readonly string[] | null | undefined): TagAssignment[] {
   const seen = new Set<string>()
   const out: TagAssignment[] = []
   for (const raw of raws ?? []) {

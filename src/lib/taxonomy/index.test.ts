@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { normalizeTag, isValidTag, normalizeTags, COURSE_VALUES, __ALIAS_TARGETS } from './index'
+import { normalizeTag, isValidTag, normalizeTags } from './index'
 
 describe('normalizeTag', () => {
   it('maps a course name to the course facet', () => {
@@ -81,16 +81,7 @@ describe('normalizeTags', () => {
   })
 
   it('returns an empty array for undefined input', () => {
-    expect(normalizeTags(undefined as never)).toEqual([])
-  })
-})
-
-describe('vocabulary invariants', () => {
-  it('every registered alias target is a valid tag', () => {
-    expect(__ALIAS_TARGETS.length).toBeGreaterThan(0)
-    for (const target of __ALIAS_TARGETS) {
-      expect(isValidTag(target)).toBe(true)
-    }
+    expect(normalizeTags(undefined)).toEqual([])
   })
 })
 
@@ -103,12 +94,12 @@ describe('correctness fixes', () => {
     expect(normalizeTag(5 as never)).toBeNull()
   })
 
-  it('returns an empty array instead of throwing for undefined input', () => {
-    expect(normalizeTags(undefined as never)).toEqual([])
-  })
-
   it('returns false instead of throwing for a prototype-named facet', () => {
     expect(isValidTag({ facet: 'toString' as never, value: 'main' })).toBe(false)
+  })
+
+  it('freezes the tag objects it hands out, so callers cannot mutate shared aliases', () => {
+    expect(Object.isFrozen(normalizeTag('Poultry'))).toBe(true)
   })
 
   it('files Baking under the oven method, not dessert', () => {
@@ -127,7 +118,15 @@ describe('correctness fixes', () => {
     expect(normalizeTag('Dinner Recipes')).toEqual({ facet: 'course', value: 'main' })
   })
 
+  it('resolves the singular "Dinner Recipe" the same as the plural', () => {
+    expect(normalizeTag('Dinner Recipe')).toEqual({ facet: 'course', value: 'main' })
+  })
+
   it('resolves an "&" joiner', () => {
     expect(normalizeTag('Soups & Stews')).toEqual({ facet: 'tag', value: 'soup' })
+  })
+
+  it('resolves the singular "Soup & Stew" compound, not just the plural', () => {
+    expect(normalizeTag('Soup & Stew')).toEqual({ facet: 'tag', value: 'soup' })
   })
 })
