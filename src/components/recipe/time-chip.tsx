@@ -1,4 +1,4 @@
-import { formatMinutes } from './format'
+import { formatMinutes } from '@/lib/format'
 
 /**
  * What the publisher claimed, beside what it actually took.

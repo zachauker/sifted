@@ -5,8 +5,13 @@ const ISO_DURATION = /^P(?:(\d+(?:\.\d+)?)D)?(?:T(?:(\d+(?:\.\d+)?)H)?(?:(\d+(?:
  * ceiling is deliberately generous. Beyond it, the value is certainly a malformed
  * feed rather than a real cook time, and null ("no data") is more useful than a
  * number that would distort every time filter it lands in.
+ *
+ * Exported because the same ceiling has to apply to a hand-typed
+ * `actualTimeMinutes` (see `src/app/api/recipes/[id]/route.ts`): a typo'd
+ * measurement distorts the same filters an unparseable feed value would, and
+ * two hand-written constants would drift.
  */
-const MAX_REASONABLE_MINUTES = 43_200 // 30 days
+export const MAX_REASONABLE_MINUTES = 43_200 // 30 days
 
 /**
  * A single "<number> <unit>" chunk inside a freeform duration string, e.g. the

@@ -1,20 +1,11 @@
 /**
  * Presentation helpers for the recipe page.
  *
- * `formatMinutes` is duplicated from `src/components/library/recipe-card.tsx`
- * rather than shared, and that is a deliberate (small) cost: the card and the
- * recipe page must agree — "1h 10m" on one surface and "1h10" on the other
- * reads as a bug — but the card lives in another agent's file tree during this
- * task. If a third surface ever needs it, lift both into `src/lib/library` and
- * delete these.
+ * `formatMinutes` used to live here as a copy of the one in
+ * `src/components/library/recipe-card.tsx`. Both copies are gone: it is now
+ * `formatMinutes` in `src/lib/format.ts`, imported by the time chip and the
+ * library card alike.
  */
-
-export function formatMinutes(minutes: number): string {
-  if (minutes < 60) return `${minutes}m`
-  const hours = Math.floor(minutes / 60)
-  const rest = minutes % 60
-  return rest === 0 ? `${hours}h` : `${hours}h ${rest}m`
-}
 
 /**
  * A taxonomy value as a person would read it: `slow-cooker` -> `Slow cooker`,

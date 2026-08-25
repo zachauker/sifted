@@ -2,10 +2,10 @@ import Image from 'next/image'
 import Link from 'next/link'
 import type { RecipeDetail } from '@/lib/db/queries/recipe-detail'
 import { DEFAULT_SORT, filterStateToQuery } from '@/lib/library/filter'
+import { EditControls, RecipeTimes, UserFieldsProvider } from './edit-controls'
 import { IngredientList } from './ingredient-list'
 import { NarrativeFold } from './narrative-fold'
 import { StepList } from './step-list'
-import { TimeChip } from './time-chip'
 import { humanizeTagValue } from './format'
 
 /**
@@ -24,16 +24,22 @@ import { humanizeTagValue } from './format'
  * control that says how long it is. There if you want the "why", invisible if
  * you don't.
  *
- * ## Why a Server Component, with no client boundary anywhere in the tree
+ * ## Why a Server Component, with exactly one client boundary
  *
- * Nothing on this page needs component JavaScript. The ingredient checkboxes
- * are uncontrolled native inputs (state owned by the browser, cleared by a
- * reload, which is exactly right for a cooking session) and the narrative fold
- * is a `<details>`. So the whole subtree renders on the server and ships as
- * HTML: no hydration, no bundle, nothing to go wrong on a phone on kitchen
- * wifi. The editing controls in the next task are the first thing here that
- * genuinely needs a client boundary, and it should be drawn around *them*, not
- * around this component.
+ * Almost nothing on this page needs component JavaScript. The ingredient
+ * checkboxes are uncontrolled native inputs (state owned by the browser,
+ * cleared by a reload, which is exactly right for a cooking session) and the
+ * narrative fold is a `<details>`. The recipe itself therefore renders on the
+ * server and ships as HTML: no hydration for the part you cook from, nothing
+ * to go wrong on a phone on kitchen wifi.
+ *
+ * The one exception is the four user-owned fields — rating, status, notes and
+ * measured time — which are edited in place and have to survive a failed
+ * request visibly. `UserFieldsProvider` wraps this article so the chip at the
+ * top and the controls at the bottom share one piece of state, but everything
+ * between them is passed through as `children` and stays server-rendered. The
+ * client bundle for this route is that provider, its two consumers, and the
+ * time chip.
  *
  * ## The scale control is Phase 2
  *
@@ -60,137 +66,126 @@ export function RecipeView({ recipe }: { recipe: RecipeDetail }) {
   const twoColumn = recipe.ingredients.length > 0 && recipe.steps.length > 0
 
   return (
-    <article className="mx-auto w-full max-w-5xl px-4 py-6 sm:px-6">
-      <header>
-        <h1 className="text-2xl leading-tight font-semibold sm:text-3xl">{recipe.title}</h1>
+    <UserFieldsProvider
+      recipeId={recipe.id}
+      initial={{
+        rating: recipe.rating,
+        status: recipe.status,
+        notes: recipe.notes,
+        actualTimeMinutes: recipe.actualTimeMinutes,
+      }}
+    >
+      <article className="mx-auto w-full max-w-5xl px-4 py-6 sm:px-6">
+        <header>
+          <h1 className="text-2xl leading-tight font-semibold sm:text-3xl">{recipe.title}</h1>
 
-        {(recipe.publisher || recipe.author || recipe.sourceUrl) && (
-          <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-neutral-500 dark:text-neutral-400">
-            {recipe.publisher && <span>{recipe.publisher}</span>}
-            {recipe.publisher && recipe.author && <span aria-hidden="true">·</span>}
-            {recipe.author && <span>{recipe.author}</span>}
-            {recipe.sourceUrl && (
-              <a
-                href={recipe.sourceUrl}
-                // The source is someone else's site, so it opens in its own
-                // tab and never gets a handle on this one via `window.opener`.
-                target="_blank"
-                rel="noopener noreferrer"
-                className="underline underline-offset-2 hover:text-neutral-800 dark:hover:text-neutral-200"
-              >
-                {sourceLabel ? `View the original on ${sourceLabel}` : 'View the original'}
-              </a>
-            )}
-          </p>
-        )}
-
-        {recipe.description && (
-          <p className="mt-3 max-w-prose text-[15px] text-neutral-600 dark:text-neutral-300">
-            {recipe.description}
-          </p>
-        )}
-
-        {/* Rendered only when there is something to put in it. An empty row
-            still carries its top margin, and a stripe of dead space above the
-            ingredients is exactly what makes the sparsest recipes — the ones
-            rescued from Notion bodies, with no times and no yield — look
-            broken rather than merely brief. */}
-        {(recipe.claimedTimeMinutes !== null ||
-          recipe.actualTimeMinutes !== null ||
-          servings !== null) && (
-          <div className="mt-4 flex flex-wrap items-center gap-2">
-            <TimeChip
-              claimedMinutes={recipe.claimedTimeMinutes}
-              actualMinutes={recipe.actualTimeMinutes}
-            />
-            {servings && (
-              <p className="rounded-full bg-neutral-100 px-3 py-1 text-sm text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
-                {servings}
-              </p>
-            )}
-          </div>
-        )}
-
-        {hero?.blobUrl && (
-          <Image
-            src={hero.blobUrl}
-            // Empty on purpose: the title sits directly above as text, and a
-            // hero photo of the finished dish adds nothing a screen reader
-            // needs said twice. There is no alt text to borrow — nothing in
-            // the pipeline captures the source page's.
-            alt=""
-            width={hero.width}
-            height={hero.height}
-            // `ingestHeroImage` already stores a 1600px-max WebP, which is the
-            // widest this ever draws. Optimizing re-encodes a file that was
-            // encoded for this purpose, per image, on request. Same call the
-            // library cards make, for the same reason.
-            unoptimized
-            className="mt-5 aspect-[3/2] w-full rounded-xl object-cover"
-          />
-        )}
-
-        {recipe.tags.length > 0 && (
-          <ul aria-label="Tags" className="mt-4 flex flex-wrap gap-2">
-            {recipe.tags.map((tag) => (
-              <li key={`${tag.facet}:${tag.value}`}>
-                <Link
-                  // Back to the library, filtered to this tag. The query
-                  // string is built by `filterStateToQuery` rather than
-                  // hand-assembled, so the parameter name and its encoding
-                  // stay owned by one module.
-                  href={`/${filterStateToQuery({ selected: [`${tag.facet}:${tag.value}`], sort: DEFAULT_SORT })}`}
-                  className="inline-block rounded-full border border-black/10 px-2.5 py-0.5 text-xs text-neutral-600 hover:border-black/25 dark:border-white/15 dark:text-neutral-300 dark:hover:border-white/35"
+          {(recipe.publisher || recipe.author || recipe.sourceUrl) && (
+            <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-neutral-500 dark:text-neutral-400">
+              {recipe.publisher && <span>{recipe.publisher}</span>}
+              {recipe.publisher && recipe.author && <span aria-hidden="true">·</span>}
+              {recipe.author && <span>{recipe.author}</span>}
+              {recipe.sourceUrl && (
+                <a
+                  href={recipe.sourceUrl}
+                  // The source is someone else's site, so it opens in its own
+                  // tab and never gets a handle on this one via `window.opener`.
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline underline-offset-2 hover:text-neutral-800 dark:hover:text-neutral-200"
                 >
-                  {humanizeTagValue(tag.value)}
-                </Link>
-              </li>
-            ))}
-          </ul>
-        )}
-      </header>
+                  {sourceLabel ? `View the original on ${sourceLabel}` : 'View the original'}
+                </a>
+              )}
+            </p>
+          )}
 
-      {/* The recipe itself. Ingredients pinned beside the steps from `lg` up,
-          stacked below it — and stacked *ingredients first*, because that is
-          the order you need them in when you are standing at the counter. */}
-      <div
-        className={
-          twoColumn
-            ? 'mt-8 grid gap-8 lg:grid-cols-[minmax(0,18rem)_minmax(0,1fr)] lg:gap-12'
-            : 'mt-8 grid gap-8'
-        }
-      >
-        <IngredientList ingredients={recipe.ingredients} />
-        <StepList steps={recipe.steps} />
-        {recipe.ingredients.length > 0 && recipe.steps.length === 0 && (
-          // Said out loud, because silence here is indistinguishable from a
-          // bug. These are the hand-typed family recipes the migration
-          // rescued: the ingredients were all anyone ever wrote down.
-          <p className="text-sm text-neutral-500 dark:text-neutral-400">
-            No steps were saved with this recipe.
-          </p>
-        )}
-      </div>
+          {recipe.description && (
+            <p className="mt-3 max-w-prose text-[15px] text-neutral-600 dark:text-neutral-300">
+              {recipe.description}
+            </p>
+          )}
 
-      {recipe.notes && (
-        <section
-          aria-labelledby="household-notes"
-          className="mt-10 rounded-xl bg-amber-50 p-4 dark:bg-amber-950/30"
+          {/* Rendered only when there is something to put in it — a decision the
+              row now owns itself, because the measured half of the time chip is
+              editable at the foot of the page and the row has to come into
+              existence the moment it is recorded. An empty row still carries its
+              top margin, and a stripe of dead space above the ingredients is
+              exactly what makes the sparsest recipes — the ones rescued from
+              Notion bodies, with no times and no yield — look broken rather than
+              merely brief. */}
+          <RecipeTimes claimedMinutes={recipe.claimedTimeMinutes} servingsLabel={servings} />
+
+          {hero?.blobUrl && (
+            <Image
+              src={hero.blobUrl}
+              // Empty on purpose: the title sits directly above as text, and a
+              // hero photo of the finished dish adds nothing a screen reader
+              // needs said twice. There is no alt text to borrow — nothing in
+              // the pipeline captures the source page's.
+              alt=""
+              width={hero.width}
+              height={hero.height}
+              // `ingestHeroImage` already stores a 1600px-max WebP, which is the
+              // widest this ever draws. Optimizing re-encodes a file that was
+              // encoded for this purpose, per image, on request. Same call the
+              // library cards make, for the same reason.
+              unoptimized
+              className="mt-5 aspect-[3/2] w-full rounded-xl object-cover"
+            />
+          )}
+
+          {recipe.tags.length > 0 && (
+            <ul aria-label="Tags" className="mt-4 flex flex-wrap gap-2">
+              {recipe.tags.map((tag) => (
+                <li key={`${tag.facet}:${tag.value}`}>
+                  <Link
+                    // Back to the library, filtered to this tag. The query
+                    // string is built by `filterStateToQuery` rather than
+                    // hand-assembled, so the parameter name and its encoding
+                    // stay owned by one module.
+                    href={`/${filterStateToQuery({ selected: [`${tag.facet}:${tag.value}`], sort: DEFAULT_SORT })}`}
+                    className="inline-block rounded-full border border-black/10 px-2.5 py-0.5 text-xs text-neutral-600 hover:border-black/25 dark:border-white/15 dark:text-neutral-300 dark:hover:border-white/35"
+                  >
+                    {humanizeTagValue(tag.value)}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
+        </header>
+
+        {/* The recipe itself. Ingredients pinned beside the steps from `lg` up,
+            stacked below it — and stacked *ingredients first*, because that is
+            the order you need them in when you are standing at the counter. */}
+        <div
+          className={
+            twoColumn
+              ? 'mt-8 grid gap-8 lg:grid-cols-[minmax(0,18rem)_minmax(0,1fr)] lg:gap-12'
+              : 'mt-8 grid gap-8'
+          }
         >
-          <h2
-            id="household-notes"
-            className="text-xs font-semibold tracking-wider text-amber-900/70 uppercase dark:text-amber-200/70"
-          >
-            Our notes
-          </h2>
-          {/* `whitespace-pre-line` because notes are typed by hand, in a
-              textarea, and the line breaks someone put in are meaningful. */}
-          <p className="mt-2 text-[15px] leading-relaxed whitespace-pre-line">{recipe.notes}</p>
-        </section>
-      )}
+          <IngredientList ingredients={recipe.ingredients} />
+          <StepList steps={recipe.steps} />
+          {recipe.ingredients.length > 0 && recipe.steps.length === 0 && (
+            // Said out loud, because silence here is indistinguishable from a
+            // bug. These are the hand-typed family recipes the migration
+            // rescued: the ingredients were all anyone ever wrote down.
+            <p className="text-sm text-neutral-500 dark:text-neutral-400">
+              No steps were saved with this recipe.
+            </p>
+          )}
+        </div>
 
-      <NarrativeFold html={recipe.narrativeHtml} publisher={recipe.publisher} />
-    </article>
+        {/* The four fields nothing else can write, at the foot of the recipe —
+            which is where you are standing when you have just finished cooking
+            and know all four of them. The panel displays them as well as edits
+            them: it is the only place on the page the rating and the status
+            appear at all. */}
+        <EditControls />
+
+        <NarrativeFold html={recipe.narrativeHtml} publisher={recipe.publisher} />
+      </article>
+    </UserFieldsProvider>
   )
 }
 

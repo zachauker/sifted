@@ -3,23 +3,55 @@
 // jsdom, opted into per file the way `tests/components/library-grid.test.tsx`
 // does — see the note in `vitest.config.mts` for why there is no second
 // Vitest project.
-import { describe, it, expect, afterEach, vi } from 'vitest'
-import { cleanup, render, screen, within } from '@testing-library/react'
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import '@testing-library/jest-dom/vitest'
 import type { RecipeDetail } from '@/lib/db/queries/recipe-detail'
 import { RecipeView } from '@/components/recipe/recipe-view'
 
-afterEach(() => {
-  cleanup()
-  vi.clearAllMocks()
-})
-
 // The page module reaches for a real libsql client through `@/lib/db`, which
 // throws `URL_INVALID` when `TURSO_DATABASE_URL` is unset. Mocked the same way
 // `tests/app/proxy.test.ts` and the route tests mock it.
-const mocks = vi.hoisted(() => ({ getRecipeBySlug: vi.fn() }))
+const mocks = vi.hoisted(() => ({
+  getRecipeBySlug: vi.fn(),
+  refresh: vi.fn(),
+}))
 vi.mock('@/lib/db', () => ({ db: { marker: 'db' } }))
 vi.mock('@/lib/db/queries/recipe-detail', () => ({ getRecipeBySlug: mocks.getRecipeBySlug }))
+// The edit controls call `useRouter().refresh()` after a successful save, and
+// there is no mounted App Router under jsdom. `notFound` is left as the real
+// export because the page's 404 test asserts on the digest it throws.
+vi.mock('next/navigation', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('next/navigation')>()
+  return { ...actual, useRouter: () => ({ refresh: mocks.refresh }) }
+})
+
+/** A `fetch` stub standing in for `PATCH /api/recipes/[id]`. */
+function stubPatch(
+  respond: (patch: Record<string, unknown>) => { ok: boolean; stored?: Record<string, unknown> },
+) {
+  const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+    const patch = JSON.parse(String(init?.body)) as Record<string, unknown>
+    const result = respond(patch)
+    if (!result.ok) return new Response('{"error":"boom"}', { status: 500 })
+    // The real endpoint answers with the stored row, not an echo of the patch.
+    return Response.json({ recipe: { id: 'r1', ...(result.stored ?? patch) } })
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
+
+beforeEach(() => {
+  // Saves succeed and store exactly what was sent, unless a test says otherwise.
+  stubPatch((patch) => ({ ok: true, stored: patch }))
+})
+
+afterEach(() => {
+  cleanup()
+  vi.unstubAllGlobals()
+  vi.clearAllMocks()
+})
 
 const { default: RecipePage } = await import('@/app/(app)/recipes/[slug]/page')
 
@@ -467,10 +499,275 @@ describe('the household notes', () => {
     expect(screen.getByText('Halve the gochujang. Serve with rice.')).toBeInTheDocument()
   })
 
-  it('renders no notes section when there are none', () => {
+  it('renders the note as text, not as markup', () => {
+    render(<RecipeView recipe={recipe({ notes: '<img src=x onerror=alert(1)>' })} />)
+
+    // Notes are typed by a person and rendered as a text node, which React
+    // escapes. They never go near `dangerouslySetInnerHTML`, which is why
+    // `sanitizeNarrative` has no business in a Client Component.
+    expect(screen.getByText('<img src=x onerror=alert(1)>')).toBeInTheDocument()
+    expect(document.querySelectorAll('img')).toHaveLength(0)
+  })
+
+  it('offers a way to write the first note when there are none, without an empty paragraph', () => {
     render(<RecipeView recipe={recipe({ notes: null })} />)
 
-    expect(screen.queryByRole('heading', { name: /our notes/i })).not.toBeInTheDocument()
+    // The panel is always present now — it is where the rating and the status
+    // live too — but a recipe with no note must not render an empty one.
+    expect(screen.getByRole('button', { name: 'Add a note' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Edit notes' })).not.toBeInTheDocument()
+  })
+})
+
+/**
+ * The four fields no extraction can produce. Everything else on this page is a
+ * read of the archived source and can be regenerated; these cannot, which is
+ * why every failure path below is asserted to say something out loud.
+ */
+describe('the edit controls', () => {
+  const patchBody = (fetchMock: ReturnType<typeof stubPatch>, call = 0) =>
+    JSON.parse(String(fetchMock.mock.calls[call][1]?.body))
+
+  it('sends only the field that changed', async () => {
+    const fetchMock = stubPatch((patch) => ({ ok: true, stored: patch }))
+    render(<RecipeView recipe={recipe({ rating: null, notes: 'Keep me.' })} />)
+
+    await userEvent.click(screen.getByRole('button', { name: '4 stars' }))
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/recipes/r1')
+    expect(fetchMock.mock.calls[0][1]?.method).toBe('PATCH')
+    // A rating tap that also carried `notes: null` would blank a paragraph
+    // nothing can regenerate.
+    expect(patchBody(fetchMock)).toEqual({ rating: 4 })
+  })
+
+  it('shows the new rating immediately, before the request settles', async () => {
+    let release: (() => void) | undefined
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        () =>
+          new Promise<Response>((resolve) => {
+            release = () => resolve(Response.json({ recipe: { id: 'r1', rating: 5 } }))
+          }),
+      ),
+    )
+    render(<RecipeView recipe={recipe({ rating: 2 })} />)
+
+    await userEvent.click(screen.getByRole('button', { name: '5 stars' }))
+
+    expect(screen.getByRole('button', { name: '5 stars' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
+    release?.()
+  })
+
+  it('offers no way to clear a rating that is not set', () => {
+    render(<RecipeView recipe={recipe({ rating: null })} />)
+    expect(screen.queryByRole('button', { name: 'Clear' })).not.toBeInTheDocument()
+  })
+
+  it('offers a way to clear a rating that is set', () => {
+    render(<RecipeView recipe={recipe({ rating: 4 })} />)
+    expect(screen.getByRole('button', { name: 'Clear' })).toBeInTheDocument()
+  })
+
+  it('clears a rating to null rather than to zero', async () => {
+    const fetchMock = stubPatch((patch) => ({ ok: true, stored: patch }))
+    render(<RecipeView recipe={recipe({ rating: 4 })} />)
+
+    await userEvent.click(screen.getByRole('button', { name: 'Clear' }))
+
+    // Not `{ rating: 0 }`: the filter rail has no `rating:0` row, so a
+    // zero-star recipe would be invisible to every rating filter. "Unrated"
+    // is the state a person means when they take a rating back.
+    await waitFor(() => expect(patchBody(fetchMock)).toEqual({ rating: null }))
+  })
+
+  it('toggles a status off when the status it already has is pressed again', async () => {
+    const fetchMock = stubPatch((patch) => ({ ok: true, stored: patch }))
+    render(<RecipeView recipe={recipe({ status: 'made_it' })} />)
+
+    await userEvent.click(screen.getByRole('button', { name: 'Made it' }))
+
+    await waitFor(() => expect(patchBody(fetchMock)).toEqual({ status: null }))
+  })
+
+  it('saves a note and shows it without a reload', async () => {
+    const fetchMock = stubPatch((patch) => ({ ok: true, stored: patch }))
+    render(<RecipeView recipe={recipe({ notes: null })} />)
+
+    await userEvent.click(screen.getByRole('button', { name: 'Add a note' }))
+    await userEvent.type(screen.getByRole('textbox', { name: 'Our notes' }), 'Halve the gochujang.')
+    await userEvent.click(screen.getByRole('button', { name: 'Save notes' }))
+
+    await waitFor(() => expect(patchBody(fetchMock)).toEqual({ notes: 'Halve the gochujang.' }))
+    expect(await screen.findByText('Halve the gochujang.')).toBeInTheDocument()
+    expect(mocks.refresh).toHaveBeenCalled()
+  })
+
+  it('takes the stored note back from the server rather than echoing the draft', async () => {
+    // The endpoint trims and empty-collapses; the client has to converge on
+    // what the database holds, not on what it sent.
+    stubPatch(() => ({ ok: true, stored: { notes: 'Halve the gochujang.' } }))
+    render(<RecipeView recipe={recipe({ notes: null })} />)
+
+    await userEvent.click(screen.getByRole('button', { name: 'Add a note' }))
+    await userEvent.type(
+      screen.getByRole('textbox', { name: 'Our notes' }),
+      '   Halve the gochujang.   ',
+    )
+    await userEvent.click(screen.getByRole('button', { name: 'Save notes' }))
+
+    expect(await screen.findByText('Halve the gochujang.')).toBeInTheDocument()
+  })
+
+  it('records a measured time and puts it in the chip at the top of the page', async () => {
+    const fetchMock = stubPatch((patch) => ({ ok: true, stored: patch }))
+    render(<RecipeView recipe={recipe({ claimedTimeMinutes: 35, actualTimeMinutes: null })} />)
+
+    expect(screen.queryByText(/took us/)).not.toBeInTheDocument()
+
+    await userEvent.type(screen.getByLabelText('How long it really took'), '70')
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(patchBody(fetchMock)).toEqual({ actualTimeMinutes: 70 }))
+    // The whole point of the feature: the claim and the measurement side by
+    // side, the moment the measurement exists.
+    expect((await screen.findByText('claims 35m')).closest('p')?.textContent).toBe(
+      'claims 35m · took us 1h 10m',
+    )
+  })
+
+  it('grows the chip row for a recipe that had no times at all', async () => {
+    stubPatch((patch) => ({ ok: true, stored: patch }))
+    render(
+      <RecipeView
+        recipe={recipe({ claimedTimeMinutes: null, actualTimeMinutes: null, yieldText: null })}
+      />,
+    )
+
+    await userEvent.type(screen.getByLabelText('How long it really took'), '25')
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    expect(await screen.findByText('took us 25m')).toBeInTheDocument()
+  })
+
+  it('marks a typed time as unsaved until it is saved', async () => {
+    stubPatch((patch) => ({ ok: true, stored: patch }))
+    render(<RecipeView recipe={recipe({ actualTimeMinutes: null })} />)
+
+    await userEvent.type(screen.getByLabelText('How long it really took'), '70')
+    expect(screen.getByText('Not saved yet')).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(screen.queryByText('Not saved yet')).not.toBeInTheDocument())
+  })
+
+  it('refuses a time that is not whole minutes, without sending it', async () => {
+    const fetchMock = stubPatch((patch) => ({ ok: true, stored: patch }))
+    render(<RecipeView recipe={recipe({ actualTimeMinutes: null })} />)
+
+    await userEvent.type(screen.getByLabelText('How long it really took'), '1.5')
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/whole minutes/i)
+    expect(fetchMock).not.toHaveBeenCalled()
+    // The entry survives being refused.
+    expect(screen.getByLabelText('How long it really took')).toHaveValue(1.5)
+  })
+})
+
+/**
+ * The failure paths, which matter more here than anywhere else in the app: a
+ * spinner that quietly gives up is how "we made this, it was a 5" gets lost,
+ * and that fact exists nowhere but this row.
+ */
+describe('the edit controls when a save fails', () => {
+  it('puts the rating back and says so', async () => {
+    stubPatch(() => ({ ok: false }))
+    render(<RecipeView recipe={recipe({ rating: 2 })} />)
+
+    await userEvent.click(screen.getByRole('button', { name: '5 stars' }))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent("We couldn't save that rating. It's back to 2 stars")
+    expect(screen.getByRole('button', { name: '2 stars' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: '5 stars' })).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  it('says what an unrated recipe went back to', async () => {
+    stubPatch(() => ({ ok: false }))
+    render(<RecipeView recipe={recipe({ rating: null })} />)
+
+    await userEvent.click(screen.getByRole('button', { name: '5 stars' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('back to unrated')
+  })
+
+  it('puts the status back and says so', async () => {
+    stubPatch(() => ({ ok: false }))
+    render(<RecipeView recipe={recipe({ status: null })} />)
+
+    await userEvent.click(screen.getByRole('button', { name: 'Made it' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('back to not set')
+    expect(screen.getByRole('button', { name: 'Made it' })).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  it('keeps the typed note in the box, and stays in the editor', async () => {
+    stubPatch(() => ({ ok: false }))
+    render(<RecipeView recipe={recipe({ notes: null })} />)
+
+    await userEvent.click(screen.getByRole('button', { name: 'Add a note' }))
+    await userEvent.type(screen.getByRole('textbox', { name: 'Our notes' }), 'It was a 5.')
+    await userEvent.click(screen.getByRole('button', { name: 'Save notes' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('your text is still here')
+    // The text a person typed is the one thing a failed save must never eat.
+    expect(screen.getByRole('textbox', { name: 'Our notes' })).toHaveValue('It was a 5.')
+    expect(screen.getByRole('button', { name: 'Save notes' })).toBeInTheDocument()
+  })
+
+  it('keeps the typed time and leaves the chip on the last stored value', async () => {
+    stubPatch(() => ({ ok: false }))
+    render(<RecipeView recipe={recipe({ claimedTimeMinutes: 35, actualTimeMinutes: null })} />)
+
+    await userEvent.type(screen.getByLabelText('How long it really took'), '70')
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/your entry is still here/i)
+    expect(screen.getByLabelText('How long it really took')).toHaveValue(70)
+    expect(screen.getByText('Not saved yet')).toBeInTheDocument()
+    expect(screen.queryByText(/took us/)).not.toBeInTheDocument()
+  })
+
+  it('does not roll back a field the failed request did not carry', async () => {
+    // Rate it (succeeds), then fail a notes save. The rating must survive.
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const patch = JSON.parse(String(init?.body)) as Record<string, unknown>
+      if ('notes' in patch) return new Response('{}', { status: 500 })
+      return Response.json({ recipe: { id: 'r1', ...patch } })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<RecipeView recipe={recipe({ rating: null, notes: null })} />)
+
+    await userEvent.click(screen.getByRole('button', { name: '5 stars' }))
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: '5 stars' })).toHaveAttribute(
+        'aria-pressed',
+        'true',
+      ),
+    )
+
+    await userEvent.click(screen.getByRole('button', { name: 'Add a note' }))
+    await userEvent.type(screen.getByRole('textbox', { name: 'Our notes' }), 'It was a 5.')
+    await userEvent.click(screen.getByRole('button', { name: 'Save notes' }))
+
+    await screen.findByRole('alert')
+    expect(screen.getByRole('button', { name: '5 stars' })).toHaveAttribute('aria-pressed', 'true')
   })
 })
 

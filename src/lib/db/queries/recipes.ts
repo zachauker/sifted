@@ -277,6 +277,129 @@ export async function applyNotionMetadata(
 }
 
 /* -------------------------------------------------------------------------- */
+/* The four fields no extraction can produce                                   */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * `rating`, `status`, `notes` and `actualTimeMinutes` — the only data in a
+ * recipe row that cannot be regenerated. Everything else on the row is a read
+ * of the archived page and can be re-extracted at will, which is exactly why
+ * `upsertRecipe`'s `sourceFields` deliberately omits these four.
+ */
+export type UserFields = {
+  rating: number | null
+  status: 'want_to_make' | 'made_it' | null
+  notes: string | null
+  actualTimeMinutes: number | null
+}
+
+/**
+ * A partial edit. **An absent key and an explicit `null` mean different
+ * things**, and the distinction is the whole contract: `{ rating: 5 }` sets the
+ * rating and must not touch the notes, while `{ rating: null }` clears the
+ * rating on purpose. Writing every key on every call would mean a rating tap
+ * silently erased a paragraph of notes typed last week — the one loss this
+ * data has no way to recover from.
+ *
+ * `undefined` counts as absent rather than as "clear it", because that is what
+ * comes back from a JSON body: JSON has `null` and has no `undefined`, so a key
+ * that arrives at all arrives with a real value.
+ */
+export type UserFieldPatch = Partial<UserFields>
+
+/**
+ * Apply a partial edit to the four user-owned fields, and keep the search index
+ * honest about the notes.
+ *
+ * Returns the four fields as they stand after the write, or `null` when there
+ * is no such recipe — a missing id is a 404 for the caller to render, not an
+ * exception to unwind. Reading them back rather than merging the patch onto
+ * what was read first means the returned values are what the database actually
+ * holds, including the empty-string-to-null normalization below.
+ */
+export async function updateUserFields(
+  db: Db,
+  recipeId: string,
+  fields: UserFieldPatch,
+): Promise<UserFields | null> {
+  return db.transaction(async (tx) => {
+    const existing = await tx
+      .select({ id: recipes.id, title: recipes.title })
+      .from(recipes)
+      .where(eq(recipes.id, recipeId))
+      .get()
+    if (!existing) return null
+
+    const patch: Partial<UserFields> & { updatedAt?: Date } = {}
+    if (fields.rating !== undefined) patch.rating = fields.rating
+    if (fields.status !== undefined) patch.status = fields.status
+    if (fields.actualTimeMinutes !== undefined) patch.actualTimeMinutes = fields.actualTimeMinutes
+
+    // Whitespace-only notes collapse to null rather than to `''`. Two ways to
+    // spell "there is no note" would mean every reader needs both checks, and
+    // the recipe page's `{recipe.notes && …}` would happily render an empty
+    // amber panel for one of them.
+    const notesEdited = fields.notes !== undefined
+    const notes = notesEdited ? ((fields.notes ?? '').trim() || null) : null
+    if (notesEdited) patch.notes = notes
+
+    if (Object.keys(patch).length > 0) {
+      patch.updatedAt = new Date()
+      await tx.update(recipes).set(patch).where(eq(recipes.id, recipeId))
+    }
+
+    if (notesEdited) {
+      // An UPDATE of the one FTS column that is user-owned, not a
+      // delete-and-reinsert of the whole row. FTS5 handles an UPDATE by
+      // removing the old column's terms from the index and adding the new
+      // ones, so the previous note stops matching (asserted in
+      // `tests/db/update-recipe.test.ts`); a bare INSERT would instead leave
+      // the stale row in place *and* duplicate the recipe in every result.
+      //
+      // `''` rather than NULL for a cleared note, matching what `upsertRecipe`
+      // writes, so the column has one representation of "nothing here".
+      const updated = await tx.run(sql`
+        UPDATE recipes_fts SET notes = ${notes ?? ''} WHERE recipe_id = ${recipeId}
+      `)
+
+      // Every production write path goes through `upsertRecipe`, which always
+      // inserts an FTS row, so this branch should be unreachable. It exists
+      // because the alternative when it *is* reached is the exact failure this
+      // function was written to end: an UPDATE matching no rows succeeds
+      // silently, and the note is saved, visible on the page, and unfindable
+      // forever with nothing anywhere saying so. (Found by hand-seeding a
+      // recipe row directly for a local run — searching for a word in its
+      // saved note returned nothing at all.)
+      //
+      // The recovered row carries the title and the note. The source-derived
+      // columns stay empty because they are `upsertRecipe`'s to write and
+      // guessing at them here would put a second, divergent indexing rule in
+      // the codebase; they were not indexed before this either, so nothing is
+      // lost by leaving them.
+      if (updated.rowsAffected === 0) {
+        await tx.run(sql`
+          INSERT INTO recipes_fts (recipe_id, title, ingredients, steps, notes, narrative)
+          VALUES (${recipeId}, ${existing.title}, '', '', ${notes ?? ''}, '')
+        `)
+      }
+    }
+
+    const after = await tx
+      .select({
+        rating: recipes.rating,
+        status: recipes.status,
+        notes: recipes.notes,
+        actualTimeMinutes: recipes.actualTimeMinutes,
+      })
+      .from(recipes)
+      .where(eq(recipes.id, recipeId))
+      .get()
+
+    return after ?? null
+  })
+}
+
+/* -------------------------------------------------------------------------- */
 /* Search                                                                      */
 /* -------------------------------------------------------------------------- */
 

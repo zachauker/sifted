@@ -1,6 +1,7 @@
 import Image from 'next/image'
 import Link from 'next/link'
 import type { LibraryEntry } from '@/lib/db/queries/library'
+import { formatMinutes } from '@/lib/format'
 import { effectiveTimeMinutes } from '@/lib/library/filter'
 import { PhotoFallback } from './photo-fallback'
 
@@ -19,13 +20,6 @@ import { PhotoFallback } from './photo-fallback'
  */
 const THUMB_WIDTH = 480
 const THUMB_HEIGHT = 360
-
-function formatMinutes(minutes: number): string {
-  if (minutes < 60) return `${minutes}m`
-  const hours = Math.floor(minutes / 60)
-  const rest = minutes % 60
-  return rest === 0 ? `${hours}h` : `${hours}h ${rest}m`
-}
 
 export function RecipeCard({ entry }: { entry: LibraryEntry }) {
   const minutes = effectiveTimeMinutes(entry)
