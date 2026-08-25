@@ -21,6 +21,7 @@
     "@anthropic-ai/sdk": "^0.120.0",
     "@libsql/client": "^0.17.4",
     "@mozilla/readability": "^0.6.0",
+    "@notionhq/client": "^5.26.0",
     "@paralleldrive/cuid2": "^3.3.0",
     "@vercel/blob": "^2.8.0",
     "@vercel/functions": "^3.9.5",
