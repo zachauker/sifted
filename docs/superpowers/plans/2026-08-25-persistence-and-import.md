@@ -2869,6 +2869,48 @@ git commit -m "docs: add iOS Shortcut setup and record the deployed-fetch result
 - Enrichment failure produces a stored recipe with `enrichment_applied = false`, not a failed import.
 - The deployed-fetch answer for Bon Appétit is recorded.
 
+## Verified end to end (local, 2026-08-25)
+
+The pipeline was run against live pages with a real `fetchPage` and a real
+`ingestHeroImage`, a temp-file database, an in-memory blob store, and a no-op
+LLM. Everything below is measured, not asserted by a test double:
+
+```
+job          : done  (1733ms)
+title        : Slow-Roast Gochujang Chicken
+publisher    : Bon Appétit | author: Molly Baz
+sourceUrl    : https://bonappetit.com/recipe/slow-roast-gochujang-chicken
+servings     : 4      method: jsonld      encoding: utf-8
+ingredients  : 11     first: 1 3½–4-lb. whole chicken
+steps        : 11     narrative: 731 chars
+tags         : course:main, cuisine:korean, ingredient:chicken,
+               ingredient:potato, method:oven
+image        : 4496x2529  recipes/<id>/hero.webp
+archive      : 214,656 B gzipped from 1,629,145 B raw
+
+re-share same URL  -> job duplicate, recipeId matches, 1 recipe row
+allrecipes.com     -> job failed / blocked, no recipe row created
+```
+
+`claimedTimeMinutes` is null for that recipe because its JSON-LD carries no
+`totalTime`, `prepTime`, or `cookTime` at all — correct behavior, not a gap.
+
+**What this does NOT cover, and what Task 15 still has to do:**
+
+1. A real Turso database rather than a local file — in particular whether a
+   concurrent duplicate import surfaces `UNIQUE constraint failed` over HTTP
+   instead of the local driver's `SQLITE_BUSY`.
+2. A real `ANTHROPIC_API_KEY`, so enrichment actually runs and
+   `enrichmentApplied` becomes true.
+3. Vercel Blob rather than the in-memory store.
+4. The HTTP layer: bearer auth, the 202 response, and `waitUntil` under a real
+   serverless runtime.
+5. **The deployed-fetch question inherited from plan 1.** Bon Appétit fetches
+   fine from a residential IP, as above. Condé Nast blocks *datacenter* ranges,
+   so this says nothing about Vercel. One import from a deployed function
+   settles whether phone-supplied HTML is a rare fallback or the primary capture
+   path for 28% of the library.
+
 ## Findings during execution
 
 - **libsql `:memory:` cannot test transactional code.** `transaction()` hands its
