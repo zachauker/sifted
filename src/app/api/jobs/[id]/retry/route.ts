@@ -3,12 +3,25 @@ import { waitUntil } from '@vercel/functions'
 import { z } from 'zod'
 import { auth } from '@/lib/auth'
 import { db } from '@/lib/db'
-import { getJob } from '@/lib/db/queries/jobs'
+import { getJob, markFailed } from '@/lib/db/queries/jobs'
 import { runImport } from '@/lib/import/run-import'
 import { createVercelBlobStore } from '@/lib/storage/vercel-blob'
+import type { BlobStore } from '@/lib/storage'
 import { createAnthropicClient } from '@/lib/llm/anthropic-client'
-import { fetchPage } from '@/lib/fetch'
+import type { LlmClient } from '@/lib/extract/llm-types'
+import { fetchPage, MAX_BYTES as MAX_FETCHED_BYTES } from '@/lib/fetch'
 import { ingestHeroImage } from '@/lib/images'
+
+/**
+ * Vercel kills a function once it exceeds this many seconds, and `waitUntil`
+ * only keeps background work alive up to that same ceiling — so this must be
+ * at least the worst-case sum of every budget the import can spend:
+ * fetch (20s, `TIMEOUT_MS` in `@/lib/fetch`) + extraction (25s,
+ * `DEFAULT_EXTRACT_BUDGET_MS` in `run-import.ts`) + hero image ingestion
+ * (15s, see `@/lib/images`) = 60s. Bump this if any of those three budgets
+ * grow.
+ */
+export const maxDuration = 60
 
 /**
  * Session-authenticated retry for a job the tray shows as failed (or for a
@@ -21,12 +34,28 @@ import { ingestHeroImage } from '@/lib/images'
  * connection is the only way forward for that kind of failure.
  */
 
-const MAX_HTML_BYTES = 5 * 1024 * 1024
+// Supplied/pasted HTML skips `fetchPage` entirely and goes straight into the
+// same JSDOM parses a fetched page does, so it must never be allowed past the
+// size that pipeline is documented as able to survive (see `MAX_BYTES` and
+// its comment in `@/lib/fetch`). Importing the constant, rather than
+// redeclaring a number here, is what keeps the two from drifting apart again.
+const MAX_HTML_BYTES = MAX_FETCHED_BYTES
 const MAX_BODY_BYTES = MAX_HTML_BYTES + 4096
 
 const bodySchema = z.object({
   html: z.string().nullish(),
 })
+
+// The only statuses a retry may act on. `running` is excluded so a retry
+// never fans out a second concurrent attempt at the same job. `duplicate`
+// and `done` are excluded too: retrying a `duplicate` job would re-fetch,
+// re-extract and pay for the model again just to overwrite the recipe it
+// merely pointed at, leaving two `done` jobs on one recipe with no record
+// that the second share was ever a duplicate; retrying a `done` job is the
+// same pointless re-spend with nothing broken to fix. Only `failed` (a real
+// error to recover from) and `queued` (a function that apparently never ran)
+// describe a job retrying can actually help.
+const RETRYABLE_STATUSES = new Set(['failed', 'queued'])
 
 export async function POST(
   request: Request,
@@ -42,11 +71,11 @@ export async function POST(
   if (!job) {
     return NextResponse.json({ error: 'not found' }, { status: 404 })
   }
-  // Never fan out two runs for one job: `markRunning` inside `runImport`
-  // would just race itself, and the tray would show one job with two
-  // concurrent attempts writing to the same recipe row.
-  if (job.status === 'running') {
-    return NextResponse.json({ error: 'job already running' }, { status: 409 })
+  if (!RETRYABLE_STATUSES.has(job.status)) {
+    return NextResponse.json(
+      { error: `cannot retry a job with status ${job.status}` },
+      { status: 409 },
+    )
   }
 
   // A request with no body at all must work — that's the ordinary retry
@@ -79,11 +108,26 @@ export async function POST(
     }
   }
 
+  // `createVercelBlobStore` and `createAnthropicClient` throw synchronously
+  // when their env var is unset. See the matching comment in
+  // `src/app/api/import/route.ts` for the full reasoning: catching it here
+  // and marking the job failed turns what would otherwise be a 500 plus a
+  // job stranded on its pre-retry status into a normal, visible, recorded
+  // failure — and 202 is still the right response because the job row
+  // already reflects that outcome by the time we respond.
+  let deps: { store: BlobStore; llm: LlmClient }
+  try {
+    deps = { store: createVercelBlobStore(), llm: createAnthropicClient() }
+  } catch (error) {
+    await markFailed(db, job.id, 'internal', error)
+    return NextResponse.json({ status: 'queued', jobId: job.id }, { status: 202 })
+  }
+
   waitUntil(
     runImport({
       db,
-      store: createVercelBlobStore(),
-      llm: createAnthropicClient(),
+      store: deps.store,
+      llm: deps.llm,
       jobId: job.id,
       url: job.url,
       addedBy: job.requestedBy,

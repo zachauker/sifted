@@ -55,7 +55,7 @@ the app's needs-attention list rather than in the notification.
 | `{"status":"queued","jobId":"..."}` | Accepted, working on it. |
 | `{"status":"duplicate","recipeId":"..."}` | Already in the library. Nothing was created. |
 | `{"error":"unauthorized"}` | The token is wrong, revoked, or the header is malformed. |
-| `{"error":"url is not valid"}` | The share sheet sent something that is not a URL. |
+| `{"error":"invalid url"}` | The share sheet sent something that is not a URL. |
 
 ## Blocked publishers
 

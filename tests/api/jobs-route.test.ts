@@ -1,9 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { MAX_BYTES } from '@/lib/fetch'
 
 const mocks = vi.hoisted(() => ({
   auth: vi.fn(),
   listJobs: vi.fn(),
   getJob: vi.fn(),
+  markFailed: vi.fn(),
   runImport: vi.fn(),
   createVercelBlobStore: vi.fn(() => ({ store: true })),
   createAnthropicClient: vi.fn(() => ({ llm: true })),
@@ -16,11 +18,18 @@ vi.mock('@/lib/db', () => ({ db: { marker: 'db' } }))
 vi.mock('@/lib/db/queries/jobs', () => ({
   listJobs: mocks.listJobs,
   getJob: mocks.getJob,
+  markFailed: mocks.markFailed,
 }))
 vi.mock('@/lib/import/run-import', () => ({ runImport: mocks.runImport }))
 vi.mock('@/lib/storage/vercel-blob', () => ({ createVercelBlobStore: mocks.createVercelBlobStore }))
 vi.mock('@/lib/llm/anthropic-client', () => ({ createAnthropicClient: mocks.createAnthropicClient }))
-vi.mock('@/lib/fetch', () => ({ fetchPage: mocks.fetchPage }))
+// Preserve the real `MAX_BYTES` export (the route imports it to derive its
+// own HTML cap) while still mocking `fetchPage` so the suite never touches
+// the network.
+vi.mock('@/lib/fetch', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/fetch')>()
+  return { ...actual, fetchPage: mocks.fetchPage }
+})
 vi.mock('@/lib/images', () => ({ ingestHeroImage: mocks.ingestHeroImage }))
 
 // Route modules are imported after the mocks above are registered so they
@@ -47,6 +56,7 @@ beforeEach(() => {
   mocks.runImport.mockResolvedValue(undefined)
   mocks.createVercelBlobStore.mockReturnValue({ store: true })
   mocks.createAnthropicClient.mockReturnValue({ llm: true })
+  mocks.markFailed.mockResolvedValue(undefined)
 })
 
 describe('GET /api/jobs', () => {
@@ -106,6 +116,27 @@ describe('POST /api/jobs/[id]/retry', () => {
     mocks.getJob.mockResolvedValue({ id: 'job-1', status: 'running', url: 'https://example.com/korma' })
     const res = await retry(makeRetryRequest(), { params: Promise.resolve({ id: 'job-1' }) })
     expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ error: 'cannot retry a job with status running' })
+    expect(mocks.runImport).not.toHaveBeenCalled()
+  })
+
+  it('returns 409 when the job is a duplicate, naming the status, and does not re-run it', async () => {
+    // Retrying a `duplicate` job would re-fetch, re-extract, and pay for the
+    // model again just to overwrite the recipe it merely pointed at — leaving
+    // two `done` jobs on one recipe with no record the second share was ever
+    // a duplicate.
+    mocks.getJob.mockResolvedValue({ id: 'job-1', status: 'duplicate', url: 'https://example.com/korma' })
+    const res = await retry(makeRetryRequest(), { params: Promise.resolve({ id: 'job-1' }) })
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ error: 'cannot retry a job with status duplicate' })
+    expect(mocks.runImport).not.toHaveBeenCalled()
+  })
+
+  it('returns 409 when the job is already done, naming the status, and does not re-run it', async () => {
+    mocks.getJob.mockResolvedValue({ id: 'job-1', status: 'done', url: 'https://example.com/korma' })
+    const res = await retry(makeRetryRequest(), { params: Promise.resolve({ id: 'job-1' }) })
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ error: 'cannot retry a job with status done' })
     expect(mocks.runImport).not.toHaveBeenCalled()
   })
 
@@ -116,14 +147,52 @@ describe('POST /api/jobs/[id]/retry', () => {
     expect(mocks.getJob).not.toHaveBeenCalled()
   })
 
-  it('returns 413 when pasted html exceeds 5MB', async () => {
-    const bigHtml = 'a'.repeat(5 * 1024 * 1024 + 1)
+  it('returns 413 when pasted html exceeds the cap', async () => {
+    const bigHtml = 'a'.repeat(MAX_BYTES + 1)
     const res = await retry(
       makeRetryRequest({ html: bigHtml }),
       { params: Promise.resolve({ id: 'job-1' }) },
     )
     expect(res.status).toBe(413)
     expect(mocks.runImport).not.toHaveBeenCalled()
+  })
+
+  // Regression test for the two caps drifting apart, same reasoning as the
+  // matching test on /api/import: this route must cap pasted html at exactly
+  // the fetch layer's `MAX_BYTES`, not an independently maintained number.
+  it("caps pasted html at exactly the fetch layer's MAX_BYTES, not an independent number", async () => {
+    const atCap = 'a'.repeat(MAX_BYTES)
+    const overCap = 'a'.repeat(MAX_BYTES + 1)
+
+    const atCapRes = await retry(
+      makeRetryRequest({ html: atCap }),
+      { params: Promise.resolve({ id: 'job-1' }) },
+    )
+    expect(atCapRes.status).not.toBe(413)
+
+    const overCapRes = await retry(
+      makeRetryRequest({ html: overCap }),
+      { params: Promise.resolve({ id: 'job-1' }) },
+    )
+    expect(overCapRes.status).toBe(413)
+  })
+
+  it('marks the job failed, rather than leaving it stranded, when the blob store cannot be constructed', async () => {
+    const constructionError = new Error('BLOB_READ_WRITE_TOKEN is not set')
+    mocks.createVercelBlobStore.mockImplementation(() => {
+      throw constructionError
+    })
+
+    const res = await retry(makeRetryRequest(), { params: Promise.resolve({ id: 'job-1' }) })
+
+    expect(mocks.runImport).not.toHaveBeenCalled()
+    expect(mocks.markFailed).toHaveBeenCalledWith(
+      expect.anything(),
+      'job-1',
+      'internal',
+      constructionError,
+    )
+    expect(res.status).toBe(202)
   })
 })
 
