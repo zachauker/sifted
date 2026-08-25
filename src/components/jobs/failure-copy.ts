@@ -88,13 +88,29 @@ export const FAILURE_COPY: Record<
  * `failureKind` is nullable in the schema even though `markFailed` always
  * sets one — a defensive fallback for a `failed` row that somehow has none,
  * rather than letting that row throw or render blank.
+ *
+ * The same fallback also covers a `failureKind` that is set but unrecognized.
+ * The column is plain `text` with no `CHECK` constraint — Drizzle's
+ * `FailureKind` union is a TypeScript-only guarantee — so a value outside the
+ * five keys of `FAILURE_COPY` is storable (`scripts/migrate-notion.ts`
+ * already treats this column as a loose string for exactly that reason).
+ * `FAILURE_COPY[job.failureKind]` is `undefined` for such a value, and
+ * calling `undefined` as a function is what took down the needs-attention
+ * page: the one screen whose whole job is to be the recovery surface when
+ * something has already gone wrong. Looked up once into `explain` and
+ * checked before calling, rather than indexed and called in one step, so an
+ * unrecognized kind falls through to the same "uncategorized" card a null
+ * `failureKind` gets — a plain admission the app doesn't recognize this
+ * failure, the stored error text if there is one, and a retry, because an
+ * unrecognized failure is more likely transient than permanent.
  */
 export function explainFailure(job: {
   url: string
   error: string | null
   failureKind: FailureKind | null
 }): FailureExplanation {
-  if (job.failureKind) return FAILURE_COPY[job.failureKind](job)
+  const explain = job.failureKind ? FAILURE_COPY[job.failureKind] : undefined
+  if (explain) return explain(job)
   return {
     heading: 'Import failed',
     body: job.error

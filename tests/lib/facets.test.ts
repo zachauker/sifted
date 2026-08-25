@@ -203,6 +203,35 @@ describe('computeFacetCounts ordering', () => {
     expect(group(groups, 'rating')?.values.map((v) => v.value)).toEqual(['5', '3'])
     expect(group(groups, 'time')?.values.map((v) => v.value)).toEqual(['under-30', 'over-2-hours'])
   })
+
+  /**
+   * Reproduced at runtime before this fix: a Notion rating of `4.5`,
+   * written through `applyNotionMetadata` with no range check, produced a
+   * `rating:4.5` token. `NATURAL_ORDER.rating.indexOf('4.5')` is `-1`, and
+   * `-1` sorts before every real index (`0`–`4`), so the rail showed a
+   * phantom "4.5 stars" row *above* "5 stars" instead of just misplacing
+   * it. `applyNotionMetadata` now clamps ratings to a 0–5 whole number
+   * before they are ever stored, but this guards the rail itself against
+   * any row that predates that fix, or was edited directly in the
+   * database — the same "trust nothing downstream" posture as
+   * `recipe-card.tsx`'s render-side clamp.
+   */
+  it('drops a rating outside the natural 1-5 scale rather than showing a phantom row', () => {
+    const groups = computeFacetCounts(
+      [
+        entry({ rating: 4.5 }),
+        entry({ rating: 5 }),
+        entry({ rating: 3 }),
+      ],
+      [],
+    )
+    expect(group(groups, 'rating')?.values.map((v) => v.value)).toEqual(['5', '3'])
+  })
+
+  it('renders no rating heading at all when every rating in the library is off-scale', () => {
+    const groups = computeFacetCounts([entry({ rating: -1 }), entry({ rating: 7 })], [])
+    expect(group(groups, 'rating')).toBeUndefined()
+  })
 })
 
 describe('derived facets', () => {

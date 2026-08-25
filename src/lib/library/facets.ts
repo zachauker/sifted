@@ -187,12 +187,21 @@ export function computeFacetCounts(
       })
     }
 
-    // A facet nothing in the library carries renders no heading at all.
-    if (values.length === 0) continue
-
+    // A facet with a fixed scale (`rating`, `time`) only ever shows the
+    // values on that scale. `entry.rating` is a plain database column with
+    // nothing enforcing 0–5 at read time, so a corrupt or pre-migration row
+    // can carry a token like `rating:4.5` that isn't on the scale at all —
+    // dropped here rather than sorted, because `natural.indexOf` returns
+    // `-1` for it, and `-1` sorts *before* every real index, putting a
+    // phantom "4.5 stars" row above "5 stars" instead of just misplacing it.
     const natural = NATURAL_ORDER[facet]
+    const rows = natural ? values.filter((v) => natural.includes(v.value)) : values
+
+    // A facet nothing in the library carries renders no heading at all.
+    if (rows.length === 0) continue
+
     if (natural) {
-      values.sort((a, b) => natural.indexOf(a.value) - natural.indexOf(b.value))
+      rows.sort((a, b) => natural.indexOf(a.value) - natural.indexOf(b.value))
     } else {
       // Count descending, then alphabetically — but against `libraryCount`,
       // the count across the whole library, so the order is computed once
@@ -208,10 +217,10 @@ export function computeFacetCounts(
       // What people build up is spatial memory: Seafood is the second row
       // under Ingredient, always. A number changing in place is
       // information; a row changing places is noise.
-      values.sort((a, b) => b.libraryCount - a.libraryCount || a.label.localeCompare(b.label))
+      rows.sort((a, b) => b.libraryCount - a.libraryCount || a.label.localeCompare(b.label))
     }
 
-    groups.push({ facet, label: FACET_LABELS[facet] ?? titleCase(facet), values })
+    groups.push({ facet, label: FACET_LABELS[facet] ?? titleCase(facet), values: rows })
   }
 
   return groups

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { eq, sql } from 'drizzle-orm'
+import { createId } from '@paralleldrive/cuid2'
 import { createTestDb, type TestDb } from '../helpers/db'
 import { upsertRecipe, applyNotionMetadata } from '@/lib/db/queries/recipes'
 import { recipes, ingredients, steps, recipeTags } from '@/lib/db/schema'
@@ -262,5 +263,50 @@ describe('upsertRecipe', () => {
     })
     const [row] = await db.select().from(recipes).where(eq(recipes.id, id))
     expect(row.createdAt.getTime()).toBeGreaterThanOrEqual(before - 1000)
+  })
+})
+
+/**
+ * Notion's `Rating` is a free number property, so nothing upstream of
+ * `applyNotionMetadata` stops a negative, fractional, or out-of-range value
+ * from arriving here. Reproduced at runtime: a stored rating of `-1` made
+ * `'★'.repeat(entry.rating)` throw `RangeError: Invalid count value: -1` on
+ * the home page. `applyNotionMetadata` is the write path these never went
+ * through validation on (`PATCH /api/recipes/[id]` already clamps with
+ * `z.number().int().min(0).max(5)`), so it is fixed here, coercing rather
+ * than rejecting — see the comment on `coerceRating` in
+ * `src/lib/db/queries/recipes.ts` for why losing a genuine rating is worse
+ * than clamping one.
+ */
+describe('applyNotionMetadata: rating coercion', () => {
+  const insertBare = async () =>
+    upsertRecipe(db, { extracted, sourceUrl: `https://x.com/rating-${createId()}`, sourceDomain: 'x.com' })
+
+  it('clamps a negative rating to 0 rather than storing it raw', async () => {
+    const id = await insertBare()
+    await applyNotionMetadata(db, id, { rating: -1, status: null, tags: [] })
+    const [row] = await db.select({ rating: recipes.rating }).from(recipes).where(eq(recipes.id, id))
+    expect(row.rating).toBe(0)
+  })
+
+  it('rounds a fractional rating to the nearest whole star', async () => {
+    const id = await insertBare()
+    await applyNotionMetadata(db, id, { rating: 4.5, status: null, tags: [] })
+    const [row] = await db.select({ rating: recipes.rating }).from(recipes).where(eq(recipes.id, id))
+    expect(row.rating).toBe(5)
+  })
+
+  it('clamps a rating above 5 to 5 rather than storing it raw', async () => {
+    const id = await insertBare()
+    await applyNotionMetadata(db, id, { rating: 7, status: null, tags: [] })
+    const [row] = await db.select({ rating: recipes.rating }).from(recipes).where(eq(recipes.id, id))
+    expect(row.rating).toBe(5)
+  })
+
+  it('leaves a normal 1-5 rating unchanged', async () => {
+    const id = await insertBare()
+    await applyNotionMetadata(db, id, { rating: 3, status: null, tags: [] })
+    const [row] = await db.select({ rating: recipes.rating }).from(recipes).where(eq(recipes.id, id))
+    expect(row.rating).toBe(3)
   })
 })

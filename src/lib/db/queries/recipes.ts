@@ -242,6 +242,36 @@ export async function upsertRecipe(db: Db, input: UpsertInput): Promise<string> 
  * never part of the searchable text, so adding Notion tags cannot make that
  * row stale.
  */
+/**
+ * Notion's `Rating` is a free `number` property — nothing in Notion stops a
+ * person typing `4.5` or `7` into it, and nothing downstream (`getNumberValue`
+ * in `src/lib/notion/client.ts`) rejects that. `recipe-card.tsx` is what
+ * renders a rating, via `'★'.repeat(rating)`, and it needs a whole number in
+ * 0–5 to do that safely — a negative value throws `RangeError` there, and an
+ * out-of-range or fractional one renders a star count that disagrees with its
+ * own screen-reader text.
+ *
+ * Coerced rather than rejected: a rating is one of the four things nowhere
+ * but Notion has (see the module doc above), so there is no second chance at
+ * it once the migration has run. Someone who typed `7` almost certainly meant
+ * "excellent", not "no opinion" — clamping to the nearest valid value keeps
+ * that signal; dropping it to null would throw away a real rating over a
+ * data-entry quirk, which is the worse failure of the two the plan calls out.
+ * Rounds before clamping so `4.5` becomes `5` (nearest), not `4` (`Math.min`
+ * first would truncate `7` to `5` correctly but round `4.5` down via
+ * whichever tie-break `Math.round` alone would pick after clamping changed
+ * its neighbourhood — rounding first keeps the two operations independent
+ * and easy to reason about).
+ *
+ * Returns `null` only for a non-finite input (`NaN`, `Infinity`) — there is
+ * no nearest valid whole number for those, so they are treated as absent
+ * rather than coerced to an arbitrary endpoint.
+ */
+function coerceRating(rating: number): number | null {
+  if (!Number.isFinite(rating)) return null
+  return Math.min(5, Math.max(0, Math.round(rating)))
+}
+
 export async function applyNotionMetadata(
   db: Db,
   recipeId: string,
@@ -257,7 +287,15 @@ export async function applyNotionMetadata(
       rating?: number
       status?: 'made_it' | 'want_to_make'
     } = { updatedAt: new Date() }
-    if (input.rating !== null) patch.rating = input.rating
+    if (input.rating !== null) {
+      const rating = coerceRating(input.rating)
+      // A non-finite rating (NaN, Infinity) has no sensible whole-number
+      // reading, so it is treated as "Notion had nothing usable here" —
+      // absent from the patch, same as a null rating — rather than storing
+      // garbage. Notion has never actually produced one of these; this is
+      // pure defense.
+      if (rating !== null) patch.rating = rating
+    }
     if (input.status !== null) patch.status = input.status
 
     await tx.update(recipes).set(patch).where(eq(recipes.id, recipeId))

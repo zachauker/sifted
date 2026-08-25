@@ -23,6 +23,17 @@ const THUMB_HEIGHT = 360
 
 export function RecipeCard({ entry }: { entry: LibraryEntry }) {
   const minutes = effectiveTimeMinutes(entry)
+  // Defense at the render boundary, independent of whatever the write path
+  // guarantees: this card renders whatever `entry.rating` holds, including a
+  // row written before `applyNotionMetadata` started clamping, or one edited
+  // directly in the database. `'★'.repeat` throws `RangeError` on a negative
+  // count and silently truncates a fractional one — clamping to a 0–5 whole
+  // number here means one bad rating can never take the rest of the grid
+  // down with it, and the star count and its screen-reader text always agree.
+  const displayRating =
+    entry.rating === null || !Number.isFinite(entry.rating)
+      ? null
+      : Math.min(5, Math.max(0, Math.round(entry.rating)))
 
   return (
     <li>
@@ -59,11 +70,11 @@ export function RecipeCard({ entry }: { entry: LibraryEntry }) {
 
         <p className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-neutral-500 dark:text-neutral-400">
           {entry.publisher && <span>{entry.publisher}</span>}
-          {entry.rating !== null && (
+          {displayRating !== null && (
             <span>
-              <span aria-hidden="true">{'★'.repeat(entry.rating)}</span>
+              <span aria-hidden="true">{'★'.repeat(displayRating)}</span>
               <span className="sr-only">
-                {entry.rating} {entry.rating === 1 ? 'star' : 'stars'}
+                {displayRating} {displayRating === 1 ? 'star' : 'stars'}
               </span>
             </span>
           )}
