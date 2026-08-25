@@ -151,6 +151,44 @@ describe('computeFacetCounts ordering', () => {
     ])
   })
 
+  it('freezes the order against the unfiltered counts, so rows never move as you filter', () => {
+    // The order is count-descending — but computed once, against the whole
+    // library, and then held still. Unfiltered, Ingredient reads
+    // `Seafood 3, Chicken 2`. Select `course:main` and the live counts
+    // become 2 and 2, which under a live sort would hand the tie to the
+    // alphabetical tiebreak and swap the two rows on an unrelated click.
+    //
+    // "Disabled, not hidden" exists so values do not move under the
+    // cursor; re-sorting by live counts moves them anyway, and worse, only
+    // sometimes. What a person builds up is spatial memory — Seafood is the
+    // second row under Ingredient — so the numbers update in place and the
+    // rows stay put.
+    const before = group(computeFacetCounts(LIBRARY, []), 'ingredient')
+    expect(before?.values.map((v) => [v.value, v.count])).toEqual([
+      ['seafood', 3],
+      ['chicken', 2],
+    ])
+
+    const after = group(computeFacetCounts(LIBRARY, ['course:main']), 'ingredient')
+    expect(after?.values.map((v) => [v.value, v.count])).toEqual([
+      ['seafood', 2],
+      ['chicken', 2],
+    ])
+  })
+
+  it('holds the order still even when a value drops to zero', () => {
+    const groups = computeFacetCounts(LIBRARY, ['ingredient:chicken'])
+    // Both chicken recipes are mains, so Appetizer and Dessert fall to
+    // zero — and stay exactly where they were, rather than sinking below
+    // Main or, worse, swapping with each other on the alphabetical
+    // tiebreak that a live sort would now be deciding between them.
+    expect(group(groups, 'course')?.values.map((v) => [v.value, v.count])).toEqual([
+      ['main', 2],
+      ['appetizer', 0],
+      ['dessert', 0],
+    ])
+  })
+
   it('keeps rating and time in their natural order rather than by count', () => {
     // A star scale shuffled by popularity is nonsense, and a fixed order is
     // even more stable between renders than count-descending is.
@@ -262,6 +300,33 @@ describe('splitVisibleValues', () => {
     const { visible, folded } = splitVisibleValues(values, { minLibraryCount: 1, collapseAfter: 2 })
     expect(visible).toHaveLength(2)
     expect(folded).toHaveLength(1)
+  })
+
+  it('decides the fold from the unfiltered counts, so values never hop across it', () => {
+    // Same reasoning as the ordering above: a row you could see a moment
+    // ago must not retreat behind "Show 1 more" because of an unrelated
+    // click. `libraryCount` is filter-independent, so the two sides of the
+    // fold are identical whatever is selected.
+    const tuning = { minLibraryCount: 1, collapseAfter: 2 }
+    const unfiltered = splitVisibleValues(computeFacetCounts(LIBRARY, [])[0].values, tuning)
+    const filtered = splitVisibleValues(
+      computeFacetCounts(LIBRARY, ['ingredient:chicken'])[0].values,
+      tuning,
+    )
+
+    expect(filtered.visible.map((v) => v.value)).toEqual(unfiltered.visible.map((v) => v.value))
+    expect(filtered.folded.map((v) => v.value)).toEqual(unfiltered.folded.map((v) => v.value))
+  })
+
+  it('shows a selected value without costing a neighbour its slot', () => {
+    // A selected value below the fold is shown as well, but does not
+    // consume one of the `collapseAfter` slots — so switching something on
+    // can never push an unrelated row down behind the fold.
+    const values = computeFacetCounts(LIBRARY, ['course:dessert'])[0].values
+    const { visible, folded } = splitVisibleValues(values, { minLibraryCount: 1, collapseAfter: 2 })
+
+    expect(visible.map((v) => v.value)).toEqual(['main', 'appetizer', 'dessert'])
+    expect(folded).toEqual([])
   })
 
   it('never folds away a value that is switched on', () => {

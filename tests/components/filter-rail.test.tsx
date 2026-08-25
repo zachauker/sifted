@@ -157,6 +157,25 @@ describe('filtering from the rail', () => {
     expect(cardTitles()).toHaveLength(6)
   })
 
+  it('updates the numbers in place without ever reordering the rows', async () => {
+    renderLibrary()
+
+    const names = () =>
+      within(screen.getByRole('group', { name: 'Ingredient' }))
+        .getAllByRole('checkbox')
+        .map((box) => box.getAttribute('aria-label') ?? box.closest('label')?.textContent ?? '')
+
+    expect(names()).toEqual(['Seafood3, 3 recipes', 'Chicken2, 2 recipes'])
+
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Main, 4 recipes' }))
+
+    // Both are 2 now, and a live count-descending sort would hand the tie
+    // to the alphabetical tiebreak and put Chicken first — moving a row the
+    // reader was not touching. The order is frozen against the unfiltered
+    // counts, so only the numbers change.
+    expect(names()).toEqual(['Seafood2, 2 recipes', 'Chicken2, 2 recipes'])
+  })
+
   it('disables a value that leads nowhere instead of hiding it', async () => {
     renderLibrary()
 

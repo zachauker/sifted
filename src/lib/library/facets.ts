@@ -194,10 +194,21 @@ export function computeFacetCounts(
     if (natural) {
       values.sort((a, b) => natural.indexOf(a.value) - natural.indexOf(b.value))
     } else {
-      // Count descending, then alphabetically. The alphabetical tiebreak is
-      // what keeps the rail from reshuffling between two renders that
-      // happen to produce the same counts in a different map order.
-      values.sort((a, b) => b.count - a.count || a.label.localeCompare(b.label))
+      // Count descending, then alphabetically — but against `libraryCount`,
+      // the count across the whole library, so the order is computed once
+      // and then frozen for every filter combination.
+      //
+      // Sorting by the *live* count instead would still be
+      // count-descending, and would still be defensible on paper, but it
+      // reorders the rail on every click: with `course:main` selected,
+      // Ingredient goes from `Seafood 3, Chicken 2` to `Chicken 2,
+      // Seafood 2` purely because of the alphabetical tiebreak. That is the
+      // same disorientation the disabled-not-hidden rule exists to prevent,
+      // arriving by a different route — and worse for being intermittent.
+      // What people build up is spatial memory: Seafood is the second row
+      // under Ingredient, always. A number changing in place is
+      // information; a row changing places is noise.
+      values.sort((a, b) => b.libraryCount - a.libraryCount || a.label.localeCompare(b.label))
     }
 
     groups.push({ facet, label: FACET_LABELS[facet] ?? titleCase(facet), values })
@@ -208,9 +219,19 @@ export function computeFacetCounts(
 
 /**
  * Splits a facet's values into the ones shown by default and the ones
- * folded behind its "Show all" control, applying `RAIL_TUNING`. A selected
- * value is never folded away — you must always be able to see and undo what
- * you have switched on.
+ * folded behind its "Show all" control, applying `RAIL_TUNING`.
+ *
+ * Which side of the fold a value lands on is decided entirely by
+ * `libraryCount` and its position in the frozen order above — never by the
+ * live count or by what is currently selected. Otherwise values hop across
+ * the fold as filters change, which is the reordering problem wearing a
+ * hat: a row you could see a moment ago is now behind "Show 4 more".
+ *
+ * Selection is the one addition, and it does not disturb anything: a
+ * selected value below the fold is shown as well, but does not consume one
+ * of the `collapseAfter` slots, so it cannot push a neighbouring row down
+ * behind the fold. You must always be able to see and undo what you have
+ * switched on, without that costing someone else their place.
  */
 export function splitVisibleValues(
   values: readonly FacetValueCount[],
@@ -218,12 +239,15 @@ export function splitVisibleValues(
 ): { visible: FacetValueCount[]; folded: FacetValueCount[] } {
   const visible: FacetValueCount[] = []
   const folded: FacetValueCount[] = []
+  let slotsUsed = 0
+
   for (const value of values) {
-    const keep =
-      value.selected ||
-      (value.libraryCount >= tuning.minLibraryCount && visible.length < tuning.collapseAfter)
-    if (keep) visible.push(value)
+    const withinFold =
+      value.libraryCount >= tuning.minLibraryCount && slotsUsed < tuning.collapseAfter
+    if (withinFold) slotsUsed += 1
+    if (withinFold || value.selected) visible.push(value)
     else folded.push(value)
   }
+
   return { visible, folded }
 }
