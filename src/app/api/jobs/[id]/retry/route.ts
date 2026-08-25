@@ -88,6 +88,11 @@ export async function POST(
       url: job.url,
       addedBy: job.requestedBy,
       suppliedHtml,
+      // A human pressed retry, so re-extracting over an existing recipe is the
+      // point rather than a duplicate to skip. Without this, retrying a job
+      // whose canonical URL already has a row is marked `duplicate` and does
+      // nothing — a button that silently no-ops.
+      allowExistingUpdate: true,
       fetchPage,
       ingestHeroImage,
     }),

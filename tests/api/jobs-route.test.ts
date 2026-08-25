@@ -126,3 +126,25 @@ describe('POST /api/jobs/[id]/retry', () => {
     expect(mocks.runImport).not.toHaveBeenCalled()
   })
 })
+
+describe('POST /api/jobs/[id]/retry — deliberate update', () => {
+  it('tells runImport that a human asked, so an existing recipe is re-extracted', async () => {
+    // Without allowExistingUpdate, runImport marks a URL that already has a
+    // recipe as `duplicate` and returns before extracting — the retry button
+    // would silently do nothing. This asserts the intent is actually passed,
+    // because this suite mocks runImport and cannot otherwise catch it.
+    mocks.auth.mockResolvedValue({ user: { id: 'user-1' } })
+    mocks.getJob.mockResolvedValue({
+      id: 'job-1', url: 'https://example.com/korma', status: 'failed', requestedBy: 'user-1',
+    })
+
+    const response = await retry(makeRetryRequest({ empty: true }), {
+      params: Promise.resolve({ id: 'job-1' }),
+    })
+
+    expect(response.status).toBe(202)
+    expect(mocks.runImport).toHaveBeenCalledWith(
+      expect.objectContaining({ allowExistingUpdate: true }),
+    )
+  })
+})
