@@ -19,6 +19,25 @@ export class NoRecipeFoundError extends Error {
   }
 }
 
+/**
+ * The model never answered — a rejection from `llm.extractRecipe`: a 429, a
+ * timeout, a dropped socket.
+ *
+ * Distinct from `NoRecipeFoundError` because the two demand opposite responses.
+ * "There is no recipe on this page" is permanent and a retry is wasted effort;
+ * "the model was rate-limited" is transient and a retry an hour from now is the
+ * whole fix. Collapsing the second into the first is how an outage gets filed
+ * as a property of the URL, and the import is never attempted again.
+ */
+export class LlmUnavailableError extends Error {
+  constructor(url: string, cause?: unknown) {
+    super(`The extraction model was unavailable for ${url}`, { cause })
+    this.name = 'LlmUnavailableError'
+    // Same downlevel-emit guard as `NoRecipeFoundError`; see the note there.
+    Object.setPrototypeOf(this, LlmUnavailableError.prototype)
+  }
+}
+
 export type ExtractInput = {
   url: string
   html: string
@@ -72,12 +91,23 @@ function resolveImageUrl(value: string | null, base: string): string | null {
  */
 const SAFE_IMAGE_PROTOCOLS = new Set(['http:', 'https:', 'data:'])
 
+/**
+ * The last resort in the extraction chain, and the only one that can fail two
+ * genuinely different ways.
+ *
+ * A rejection means the call never produced an answer, so nothing is known
+ * about the page: that throws `LlmUnavailableError` and the caller must not
+ * conclude anything about whether a recipe is there. A resolved response that
+ * fails the schema or carries an empty title is an answer — the model looked
+ * and found nothing — and returns null, which the chain turns into
+ * `NoRecipeFoundError`.
+ */
 async function fromLlm(url: string, html: string, llm: LlmClient): Promise<PartialRecipe | null> {
   let raw: unknown
   try {
     raw = await llm.extractRecipe({ url, text: pageText(html) })
-  } catch {
-    return null
+  } catch (error) {
+    throw new LlmUnavailableError(url, error)
   }
 
   const parsed = llmRecipeSchema.safeParse(raw)

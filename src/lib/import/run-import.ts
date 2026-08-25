@@ -3,9 +3,21 @@ import { promisify } from 'node:util'
 import { gzip } from 'node:zlib'
 import type { Db } from '@/lib/db'
 import { images } from '@/lib/db/schema'
-import { markDone, markFailed, markRunning, type FailureKind } from '@/lib/db/queries/jobs'
-import { upsertRecipe } from '@/lib/db/queries/recipes'
-import { extract, NoRecipeFoundError, type ExtractedRecipe } from '@/lib/extract'
+import {
+  getJob,
+  markDone,
+  markDuplicate,
+  markFailed,
+  markRunning,
+  type FailureKind,
+} from '@/lib/db/queries/jobs'
+import { findBySourceUrl, upsertRecipe } from '@/lib/db/queries/recipes'
+import {
+  extract,
+  LlmUnavailableError,
+  NoRecipeFoundError,
+  type ExtractedRecipe,
+} from '@/lib/extract'
 import type { LlmClient } from '@/lib/extract/llm-types'
 import { BlockedError, FetchFailedError, type FetchedPage } from '@/lib/fetch'
 import type { IngestedImage } from '@/lib/images'
@@ -40,6 +52,19 @@ export type RunImportInput = {
    */
   suppliedHtml?: string | null
   extractBudgetMs?: number
+  /**
+   * Permission to re-extract over a recipe that already exists at the canonical
+   * URL, instead of stopping at `duplicate`.
+   *
+   * Default false, because the overwhelmingly common caller is a fresh share
+   * from the phone: the user sent a link, and if we already have that recipe
+   * the correct answer is "you already have this" without paying for a fetch,
+   * two model calls and an image download. The retry route is the caller that
+   * sets it — a human pressing retry on a failed job is asking for exactly the
+   * work this flag permits, and without it the button would silently do nothing
+   * for any URL that already has a row.
+   */
+  allowExistingUpdate?: boolean
   /** Injected so tests never touch the network. */
   fetchPage: (url: string) => Promise<FetchedPage>
   /** Injected for the same reason. */
@@ -55,6 +80,25 @@ class ExtractionBudgetExceededError extends Error {
     super(`Extraction exceeded its ${budgetMs}ms budget`)
     this.name = 'ExtractionBudgetExceededError'
     Object.setPrototypeOf(this, ExtractionBudgetExceededError.prototype)
+  }
+}
+
+/**
+ * Raised when this run would replace a recipe that already has model-parsed
+ * data with a strictly worse read of the same page.
+ *
+ * Carries `llm_failed` rather than `internal` because nothing is broken: the
+ * model was unavailable, that is retryable, and a later attempt with a working
+ * model will store the same data we declined to destroy.
+ */
+class EnrichmentRegressionError extends Error {
+  constructor(canonicalUrl: string) {
+    super(
+      `Enrichment did not apply and ${canonicalUrl} already has an enriched recipe; ` +
+        'the existing recipe was preserved and nothing was overwritten',
+    )
+    this.name = 'EnrichmentRegressionError'
+    Object.setPrototypeOf(this, EnrichmentRegressionError.prototype)
   }
 }
 
@@ -101,6 +145,10 @@ function classify(error: unknown): FailureKind {
   if (error instanceof BlockedError) return 'blocked'
   if (error instanceof FetchFailedError) return 'fetch_failed'
   if (error instanceof NoRecipeFoundError) return 'no_recipe'
+  // Both of these mean "the model let us down"; `no_recipe` would be a lie that
+  // tells the user never to try again.
+  if (error instanceof LlmUnavailableError) return 'llm_failed'
+  if (error instanceof EnrichmentRegressionError) return 'llm_failed'
   return 'internal'
 }
 
@@ -156,6 +204,31 @@ function suppliedPage(url: string, html: string): FetchedPage {
 }
 
 /**
+ * Whether this run is allowed to re-extract over a recipe that already exists,
+ * rather than stopping at `duplicate`.
+ *
+ * Two ways to earn it, and they cover different callers:
+ *
+ * 1. `allowExistingUpdate`, set by the retry route. A retry is a human saying
+ *    "do it again", and the job it retries has no `recipeId` at all — it
+ *    failed — so nothing about the job row could distinguish it from a fresh
+ *    share. Only the caller knows, so only the caller can say.
+ * 2. The job already points at this exact recipe. That is a re-run of a job
+ *    that previously succeeded (a redelivered queue message, a manual
+ *    re-extraction), and it is by definition not a different user sharing a
+ *    link we already have. Deduping it would report `duplicate` for the very
+ *    recipe the job itself created.
+ *
+ * A job pointing at a *different* recipe earns nothing: that is a URL that has
+ * moved, and the recipe now living at the canonical URL is somebody else's row.
+ */
+async function isDeliberateUpdate(input: RunImportInput, existingRecipeId: string) {
+  if (input.allowExistingUpdate) return true
+  const job = await getJob(input.db, input.jobId)
+  return job?.recipeId === existingRecipeId
+}
+
+/**
  * The composition root of the import: the pure extractor, the network, the LLM,
  * blob storage and the database, wired together exactly once.
  *
@@ -163,7 +236,8 @@ function suppliedPage(url: string, html: string): FetchedPage {
  * already returned 202 to the phone, so nothing is left to catch anything it
  * throws: a rejection becomes an unhandled rejection and the job row sits on
  * `running` forever, invisible to the tray that exists to surface problems.
- * Every failure path ends at `markFailed` with a kind.
+ * Every failure path ends at `markFailed` with a kind, and every non-failure
+ * path at `markDone` or `markDuplicate`.
  */
 export async function runImport(input: RunImportInput): Promise<void> {
   const { db, store, llm, jobId, url } = input
@@ -181,6 +255,27 @@ export async function runImport(input: RunImportInput): Promise<void> {
     const sourceUrl = page.finalUrl || url
     const canonical = normalizeSourceUrl(sourceUrl)
 
+    // The real dedupe check, and it can only happen here.
+    //
+    // The API dedupes on the URL as shared, which is the wrong key the moment a
+    // redirect is involved: `bit.ly/3xyz`, `/recipe/123` and the http:// form
+    // of a link all resolve to a recipe we already have, and none of them match
+    // anything in the table until after the fetch. Without this, every reshare
+    // of a shortened link paid for a full import — fetch, extraction, up to two
+    // model calls, an image download — and reported `done`. No duplicate row
+    // ever appeared, because the UNIQUE constraint on `source_url` turned the
+    // write into an update, so the only visible symptom was the model bill.
+    //
+    // After the fetch because that is the first moment the canonical URL is
+    // known; before extraction because skipping the expensive half is the
+    // entire point.
+    const existing = await findBySourceUrl(db, canonical.url)
+
+    if (existing && !(await isDeliberateUpdate(input, existing.id))) {
+      await markDuplicate(db, jobId, existing.id)
+      return
+    }
+
     // `extract` resolves relative image references against this, so it gets the
     // URL the bytes actually came from rather than the tracking-stripped one:
     // stripping is right for storage and dedupe, but the base for resolving a
@@ -189,6 +284,25 @@ export async function runImport(input: RunImportInput): Promise<void> {
       () => extract({ url: sourceUrl, html: page.html, llm }),
       budgetMs,
     )
+
+    const applied = enrichmentApplied(extracted)
+
+    // Refuse to trade good data for bad.
+    //
+    // `upsertRecipe` replaces children wholesale, so writing this extraction
+    // would delete parsed quantities, units and items that are already stored
+    // and replace them with nulls. When the model was unavailable we hold
+    // strictly worse data than what is on disk, and writing it is a pure loss —
+    // there is no sense in which it is an improvement. `llm_failed` is
+    // retryable, so the correct outcome is "try again later", not "overwrite
+    // with something worse".
+    //
+    // Only when the stored recipe *has* enrichment: a first import that fails
+    // enrichment still stores the recipe and still succeeds, because a recipe
+    // without parsed quantities is a usable recipe and is better than nothing.
+    if (existing?.enrichmentApplied && !applied) {
+      throw new EnrichmentRegressionError(canonical.url)
+    }
 
     // Archive the bytes the server actually sent, gzipped — never a re-encode
     // of `page.html`. A re-encode is lossy the moment the decode was wrong, and
@@ -209,7 +323,7 @@ export async function runImport(input: RunImportInput): Promise<void> {
       sourceDomain: canonical.domain,
       archivedHtmlKey: key,
       sourceEncoding: page.encoding,
-      enrichmentApplied: enrichmentApplied(extracted),
+      enrichmentApplied: applied,
       addedBy: input.addedBy ?? null,
     })
 

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { gunzipSync } from 'node:zlib'
 import { eq } from 'drizzle-orm'
 import { createTestDb, type TestDb } from '../helpers/db'
@@ -9,7 +9,20 @@ import type { LlmClient } from '@/lib/extract/llm-types'
 import type { IngestedImage } from '@/lib/images'
 import { createJob, getJob } from '@/lib/db/queries/jobs'
 import { runImport } from '@/lib/import/run-import'
+import { extract } from '@/lib/extract'
 import { recipes, ingredients, images } from '@/lib/db/schema'
+
+/**
+ * `extract` is spied on, not stubbed: the real implementation still runs, so
+ * every other test in this file is unaffected. The spy exists for one
+ * assertion — that a duplicate is recognised *before* the expensive half of the
+ * import, which is the entire value of the dedupe check and is invisible from
+ * the outside otherwise.
+ */
+vi.mock('@/lib/extract', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/extract')>()
+  return { ...actual, extract: vi.fn(actual.extract) }
+})
 
 const SOURCE_URL = 'https://example.com/recipes/gochujang-noodles?utm_source=text'
 const CANONICAL_URL = 'https://example.com/recipes/gochujang-noodles'
@@ -135,6 +148,7 @@ let store: ReturnType<typeof createMemoryStore>
 beforeEach(async () => {
   db = await createTestDb()
   store = createMemoryStore()
+  vi.mocked(extract).mockClear()
 })
 
 async function newJob(url = SOURCE_URL) {
@@ -371,5 +385,171 @@ describe('runImport', () => {
     // Truncated, so one huge stack cannot bloat the row.
     expect(job?.error!.length).toBeLessThanOrEqual(2000)
     expect(await db.select().from(recipes)).toHaveLength(0)
+  })
+})
+
+describe('runImport: an existing recipe is never traded for worse data', () => {
+  it('refuses to overwrite an enriched recipe when this run’s enrichment fails', async () => {
+    const jobId = await newJob()
+    const shared = {
+      db,
+      store,
+      jobId,
+      url: SOURCE_URL,
+      fetchPage: fakeFetch(fetchedPage(recipeHtml())),
+      ingestHeroImage: fakeIngest(),
+    }
+
+    await runImport({ ...shared, llm: fakeLlm() })
+
+    const [before] = await db.select().from(recipes)
+    expect(before.enrichmentApplied).toBe(true)
+
+    // The same job runs again — a redelivered queue message, say — while the
+    // model is rate limited. Nothing about the page changed; only the model
+    // went away.
+    await runImport({
+      ...shared,
+      llm: fakeLlm({ async enrich() { throw new Error('429 rate limited') } }),
+    })
+
+    const [after] = await db.select().from(recipes)
+    expect(after.id).toBe(before.id)
+    expect(after.enrichmentApplied).toBe(true)
+
+    // The point of the exercise: the parsed values are still the originals, not
+    // the nulls this run would have written.
+    const lines = await db
+      .select()
+      .from(ingredients)
+      .where(eq(ingredients.recipeId, after.id))
+      .orderBy(ingredients.position)
+    expect(lines.map((l) => l.quantity)).toEqual([1, 2])
+    expect(lines.map((l) => l.unit)).toEqual(['tablespoon', 'tablespoon'])
+    expect(lines.map((l) => l.item)).toEqual(['gochujang', 'wheat noodles'])
+
+    const job = await getJob(db, jobId)
+    expect(job?.status).toBe('failed')
+    // Retryable, not permanent: a later run with a working model stores exactly
+    // the data we declined to destroy.
+    expect(job?.failureKind).toBe('llm_failed')
+    expect(job?.error).toMatch(/preserved/)
+  })
+})
+
+describe('runImport: an unavailable model is not a page without a recipe', () => {
+  it('marks a rejected extractRecipe call as llm_failed', async () => {
+    const jobId = await newJob()
+    const llm = fakeLlm({
+      async extractRecipe() { throw new Error('429 rate limited') },
+    })
+
+    await runImport({
+      db, store, llm, jobId, url: SOURCE_URL,
+      fetchPage: fakeFetch(fetchedPage(PLAIN_HTML)), ingestHeroImage: fakeIngest(),
+    })
+
+    const job = await getJob(db, jobId)
+    expect(job?.status).toBe('failed')
+    // `no_recipe` would be a claim about the page that this run cannot make:
+    // nothing ever looked at it.
+    expect(job?.failureKind).toBe('llm_failed')
+    expect(await db.select().from(recipes)).toHaveLength(0)
+  })
+
+  it('still marks an answered-but-empty extraction as no_recipe', async () => {
+    const jobId = await newJob()
+    const llm = fakeLlm({
+      async extractRecipe() {
+        return {
+          title: '   ',
+          description: null,
+          author: null,
+          claimedTimeMinutes: null,
+          servings: null,
+          yieldText: null,
+          ingredients: [],
+          steps: [],
+        }
+      },
+    })
+
+    await runImport({
+      db, store, llm, jobId, url: SOURCE_URL,
+      fetchPage: fakeFetch(fetchedPage(PLAIN_HTML)), ingestHeroImage: fakeIngest(),
+    })
+
+    const job = await getJob(db, jobId)
+    expect(job?.status).toBe('failed')
+    // The model answered and there was nothing there. A retry never helps.
+    expect(job?.failureKind).toBe('no_recipe')
+    expect(await db.select().from(recipes)).toHaveLength(0)
+  })
+})
+
+describe('runImport: dedupe happens on the post-redirect canonical URL', () => {
+  async function seedExistingRecipe() {
+    const jobId = await newJob()
+    await runImport({
+      db, store, llm: fakeLlm(), jobId, url: SOURCE_URL,
+      fetchPage: fakeFetch(fetchedPage(recipeHtml())), ingestHeroImage: fakeIngest(),
+    })
+    const [recipe] = await db.select().from(recipes)
+    vi.mocked(extract).mockClear()
+    return recipe
+  }
+
+  it('marks a shortened link that redirects onto an existing recipe as duplicate', async () => {
+    const recipe = await seedExistingRecipe()
+
+    const shortened = 'https://bit.ly/3xyzabc'
+    const jobId = await newJob(shortened)
+    const ingest = fakeIngest()
+
+    await runImport({
+      db, store, llm: fakeLlm(), jobId, url: shortened,
+      // The bytes come back from the canonical URL, which is the only place the
+      // duplicate is visible.
+      fetchPage: fakeFetch(fetchedPage(recipeHtml())), ingestHeroImage: ingest,
+    })
+
+    const job = await getJob(db, jobId)
+    expect(job?.status).toBe('duplicate')
+    expect(job?.recipeId).toBe(recipe.id)
+    expect(job?.failureKind).toBeNull()
+    expect(job?.finishedAt).toBeInstanceOf(Date)
+
+    // Skipping the expensive half is the whole point: no extraction, no model
+    // calls, no image download.
+    expect(vi.mocked(extract)).not.toHaveBeenCalled()
+    expect(ingest.calls).toEqual([])
+    expect(await db.select().from(recipes)).toHaveLength(1)
+  })
+
+  it('re-extracts an existing recipe when the caller asks for it', async () => {
+    const recipe = await seedExistingRecipe()
+
+    const html = recipeHtml().replace(/Grandma’s Gochujang Noodles/g, 'Updated Gochujang Noodles')
+    const jobId = await newJob()
+
+    await runImport({
+      db, store, llm: fakeLlm(), jobId, url: SOURCE_URL,
+      // What the retry route sets. A failed job has no `recipeId`, so nothing
+      // on the row could stand in for this — only the caller knows a human
+      // pressed retry.
+      allowExistingUpdate: true,
+      fetchPage: fakeFetch(fetchedPage(html)), ingestHeroImage: fakeIngest(),
+    })
+
+    expect(vi.mocked(extract)).toHaveBeenCalledOnce()
+
+    const rows = await db.select().from(recipes)
+    expect(rows).toHaveLength(1)
+    expect(rows[0].id).toBe(recipe.id)
+    expect(rows[0].title).toBe('Updated Gochujang Noodles')
+
+    const job = await getJob(db, jobId)
+    expect(job?.status).toBe('done')
+    expect(job?.recipeId).toBe(recipe.id)
   })
 })
