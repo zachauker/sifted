@@ -130,13 +130,20 @@ Facets, replacing the flat 68-option `Tags`:
 
 | Facet | Cardinality | Example values |
 | --- | --- | --- |
-| `course` | single | Main, Side, Appetizer, Dessert, Breakfast, Sauce/Condiment, Bread, Drink |
+| `course` | multi (usually one) | Main, Side, Appetizer, Dessert, Breakfast, Sauce/Condiment, Bread, Drink |
 | `ingredient` | multi | Chicken, Beef, Pork, Seafood, Vegetarian, Pasta, Potato |
 | `method` | multi | Grill, Oven, Stovetop, Slow cooker, Instant Pot, Air fryer, No-cook |
 | `cuisine` | multi | Italian, Mexican, Thai, Mediterranean |
 | `tag` | multi | Open long tail: Meal Prep, Party Food, Thanksgiving |
 
 Filters combine **AND across facets, OR within a facet**.
+
+`course` was originally specified as single-valued. Live extraction showed real
+publishers legitimately assigning two — Bon Appétit's cabbage gratin is tagged
+both Main and Side, and both are true of it. Since filtering is OR-within-facet,
+a second course costs nothing and carries real information, so the constraint was
+relaxed rather than arbitrarily discarding one. The enrichment prompt still asks
+for at most one, so multiples only arise when the source asserts them.
 
 **"Meal" (breakfast/lunch/dinner) is deliberately excluded.** It duplicates
 `course`, and the existing data shows `Dinner` applied reflexively to almost
