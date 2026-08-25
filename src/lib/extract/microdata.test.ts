@@ -51,4 +51,67 @@ describe('fromMicrodata', () => {
     const nameless = '<div itemscope itemtype="http://schema.org/Recipe"><p>x</p></div>'
     expect(fromMicrodata(nameless)).toBeNull()
   })
+
+  it('prefers the visible text of a linked byline over its href', () => {
+    const linkedAuthor = `<div itemscope itemtype="http://schema.org/Recipe">
+      <span itemprop="name">Linked Author Test</span>
+      <a itemprop="author" href="/author/elise">Elise Bauer</a>
+    </div>`
+    expect(fromMicrodata(linkedAuthor)?.author).toBe('Elise Bauer')
+  })
+
+  it('still reads a meta content attribute for a text-valued property', () => {
+    const metaAuthor = `<div itemscope itemtype="http://schema.org/Recipe">
+      <span itemprop="name">Meta Author Test</span>
+      <meta itemprop="author" content="Elise Bauer">
+    </div>`
+    expect(fromMicrodata(metaAuthor)?.author).toBe('Elise Bauer')
+  })
+
+  it('still reads the src attribute for image, a reference property', () => {
+    const img = `<div itemscope itemtype="http://schema.org/Recipe">
+      <span itemprop="name">Image Reference Test</span>
+      <img itemprop="image" src="https://example.com/sauce.jpg">
+    </div>`
+    expect(fromMicrodata(img)?.heroImageUrl).toBe('https://example.com/sauce.jpg')
+  })
+
+  it('splits a recipeInstructions wrapper containing multiple paragraphs into one step each', () => {
+    const paragraphs = `<div itemscope itemtype="http://schema.org/Recipe">
+      <span itemprop="name">Paragraph Steps Test</span>
+      <div itemprop="recipeInstructions">
+        <p>Step one.</p>
+        <p>Step two.</p>
+        <p>Step three.</p>
+      </div>
+    </div>`
+    expect(fromMicrodata(paragraphs)?.steps.map((s) => s.text)).toEqual([
+      'Step one.',
+      'Step two.',
+      'Step three.',
+    ])
+  })
+
+  it('splits a recipeInstructions wrapper containing an ordered list into one step per item', () => {
+    const list = `<div itemscope itemtype="http://schema.org/Recipe">
+      <span itemprop="name">List Steps Test</span>
+      <div itemprop="recipeInstructions">
+        <ol>
+          <li>Step one.</li>
+          <li>Step two.</li>
+        </ol>
+      </div>
+    </div>`
+    expect(fromMicrodata(list)?.steps.map((s) => s.text)).toEqual(['Step one.', 'Step two.'])
+  })
+
+  it('keeps a single step when recipeInstructions has no block-level children', () => {
+    const plain = `<div itemscope itemtype="http://schema.org/Recipe">
+      <span itemprop="name">Plain Text Step Test</span>
+      <span itemprop="recipeInstructions">Simmer everything for 30 minutes.</span>
+    </div>`
+    expect(fromMicrodata(plain)?.steps.map((s) => s.text)).toEqual([
+      'Simmer everything for 30 minutes.',
+    ])
+  })
 })
