@@ -14,7 +14,8 @@
     "db:migrate": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio",
     "seed": "tsx --env-file-if-exists=.env.local scripts/seed-users.ts",
-    "token": "tsx --env-file-if-exists=.env.local scripts/issue-token.ts"
+    "token": "tsx --env-file-if-exists=.env.local scripts/issue-token.ts",
+    "unenriched": "tsx --env-file-if-exists=.env.local scripts/list-unenriched.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.120.0",

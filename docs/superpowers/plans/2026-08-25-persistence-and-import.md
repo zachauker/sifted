@@ -2970,6 +2970,31 @@ not silently re-raised or silently fixed later.
 
 ## Handoff to plan 3
 
+- **A redirected failed job's archive is not findable from the job row.** The
+  import route stores `normalizeSourceUrl(sharedUrl)` on the job; the archive
+  key is derived from `normalizeSourceUrl(page.finalUrl)`. For a shortened or
+  canonicalizing link those differ, so hashing `import_jobs.url` misses the
+  blob. Blocked and non-redirect cases — the common ones — are fine. Fixing it
+  properly means recording the resolved URL on the job, which is a column.
+
+- **`markFailed` does not clear `recipeId`.** Combined with
+  `isDeliberateUpdate`'s "the job already points at this recipe" clause, that
+  means once a job has succeeded, every later retry bypasses the dedupe check
+  regardless of `allowExistingUpdate`. Arguably correct, but it narrows the
+  flag's load-bearing case to jobs that have never succeeded — narrower than the
+  code comment implies.
+
+- **`tests/integration/blocked-recovery.test.ts` shares one database** across
+  its tests, because route modules capture `db` at import time. Its cases stay
+  isolated by using distinct URLs. A third test must do the same or state will
+  bleed.
+
+- **`enrichment_applied` now has a consumer** — `npm run unenriched` lists
+  recipes that stored without parsed quantities or tags, which is how a
+  rate-limited migration is detected and repaired. Run it after the migration.
+
+
+
 Plan 3 builds the UI (library grid with the filter rail, recipe page, needs-attention screens) and migrates the 156 Notion recipes.
 
 - **The deployed-fetch result from Task 15, Step 5** decides whether the migration can run server-side or needs browser-captured HTML for Condé Nast.
