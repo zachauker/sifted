@@ -440,7 +440,7 @@ describe('fromNotionBody — structured body', () => {
     expect(noLlm.extractRecipe).not.toHaveBeenCalled()
     expect(r.ingredients).toHaveLength(21)
     expect(r.ingredients[0].rawText).toBe('1 lb. 85% lean ground beef')
-    expect(r.steps).toHaveLength(5)
+    expect(r.steps).toHaveLength(4)
   })
 
   it('carries sub-headings through as ingredient and step sections', async () => {
@@ -734,6 +734,25 @@ git commit -m "feat: apply Notion rating, status, and tags after import"
 ```
 
 ---
+
+### Carried forward from Task 3
+
+Two things surfaced while building body recovery that later tasks must handle:
+
+- **The salvage narrative heuristic is the one place data can vanish.**
+  `looksLikeNarrative` classifies a line as prose when it exceeds 12 words, or
+  when it ends in terminal punctuation, has 6+ words, and does not start with a
+  digit. Every threshold is biased toward keeping, and nothing is lost on the
+  committed fixture — but a long quantityless ingredient written as a sentence
+  would be silently discarded. **The dry run must check this against the other
+  154 bodies**, not just the two captured here.
+
+- **`fromNotionBody` deliberately does not enrich.** Unlike `extract()`, it
+  never calls `applyEnrichment` — that would contradict its never-parse-quantities
+  rule. So a body-recovered recipe arrives with no parsed quantities and no
+  tags beyond the row's own. **The Task 7 runner must invoke enrichment for the
+  body-recovery path**, or every recipe rescued from Notion lands unfilterable —
+  the exact failure `npm run unenriched` exists to catch.
 
 ### Task 6: The dry run
 
