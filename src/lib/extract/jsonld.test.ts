@@ -119,4 +119,18 @@ describe('fromJsonLd', () => {
     expect(r.steps).toEqual([])
     expect(r.claimedTimeMinutes).toBeNull()
   })
+
+  it('does not leak state between calls through the shared scratch element, even after malformed markup', () => {
+    const withUnclosedTag = fromJsonLd({
+      ...base,
+      recipeInstructions: [{ '@type': 'HowToStep', text: '<div><span>foo' }],
+    })
+    expect(withUnclosedTag.steps[0].text).toBe('foo')
+
+    const plain = fromJsonLd({
+      ...base,
+      recipeInstructions: [{ '@type': 'HowToStep', text: 'bar' }],
+    })
+    expect(plain.steps[0].text).toBe('bar')
+  })
 })

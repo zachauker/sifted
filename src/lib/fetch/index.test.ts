@@ -116,11 +116,11 @@ describe('fetchPage', () => {
     expect(result.html).toBe('<html></html>')
   })
 
-  it('rejects when Content-Length exceeds the 10MB cap, without reading the body', async () => {
+  it('rejects when Content-Length exceeds the 3MB cap, without reading the body', async () => {
     const textSpy = vi.fn(async () => '<html></html>')
     stub({
       headers: {
-        get: (k: string) => (k.toLowerCase() === 'content-length' ? String(11 * 1024 * 1024) : null),
+        get: (k: string) => (k.toLowerCase() === 'content-length' ? String(4 * 1024 * 1024) : null),
       } as unknown as Headers,
       text: textSpy,
     })
@@ -129,11 +129,30 @@ describe('fetchPage', () => {
   })
 
   it('rejects an oversized body when Content-Length is absent, after reading it', async () => {
-    const bigHtml = 'a'.repeat(11 * 1024 * 1024)
+    const bigHtml = 'a'.repeat(4 * 1024 * 1024)
     stub({
       headers: { get: () => null } as unknown as Headers,
       text: async () => bigHtml,
     })
     await expect(fetchPage('https://example.com/r')).rejects.toBeInstanceOf(FetchFailedError)
+  })
+
+  it('rejects a body just over the 3MB cap', async () => {
+    const html = 'a'.repeat(3 * 1024 * 1024 + 1)
+    stub({
+      headers: { get: () => null } as unknown as Headers,
+      text: async () => html,
+    })
+    await expect(fetchPage('https://example.com/r')).rejects.toBeInstanceOf(FetchFailedError)
+  })
+
+  it('accepts a body just under the 3MB cap', async () => {
+    const html = 'a'.repeat(3 * 1024 * 1024 - 1)
+    stub({
+      headers: { get: () => null } as unknown as Headers,
+      text: async () => html,
+    })
+    const result = await fetchPage('https://example.com/r')
+    expect(result.html).toBe(html)
   })
 })

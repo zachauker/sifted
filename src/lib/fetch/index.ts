@@ -3,7 +3,15 @@ const USER_AGENT =
   '(KHTML, like Gecko) Chrome/125.0 Safari/537.36'
 
 const TIMEOUT_MS = 20_000
-const MAX_BYTES = 10 * 1024 * 1024
+
+// JSDOM amplifies HTML roughly 300x in memory once the extraction pipeline
+// parses it, and this app runs on serverless functions with roughly 1-2 GB
+// of memory — a 10 MB page was measured OOM-crashing the process at 4.5 GB
+// peak RSS. Real recipe pages from the user's library run 0.6-1.63 MB (Bon
+// Appétit: 1.36/1.63/1.25 MB; two WordPress food blogs: ~600 KB each), so
+// 3 MB is roughly 2x the largest real page observed and bounds worst-case
+// memory to something a serverless function survives.
+const MAX_BYTES = 3 * 1024 * 1024
 
 /** The site refused us — typically a datacenter-IP block. Retry from the phone. */
 export class BlockedError extends Error {
