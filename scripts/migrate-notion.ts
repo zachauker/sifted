@@ -1383,7 +1383,7 @@ async function loadRuntime() {
     getJob: jobsModule.getJob,
     upsertRecipe: recipesModule.upsertRecipe,
     // Read by the body path before it writes, to refuse a downgrade. See
-    // `wouldRegressEnrichment`.
+    // `refuseBodyDowngrade`.
     findBySourceUrl: recipesModule.findBySourceUrl,
     applyNotionMetadata: recipesModule.applyNotionMetadata,
     runImport: importModule.runImport,
@@ -1628,36 +1628,87 @@ async function storeCapturedHeroImage(
 }
 
 /**
- * Whether writing `recipe` over whatever already lives at `sourceUrl` would
- * trade model-parsed data for nulls.
+ * Which rule refused a body-path write, and what to tell the operator.
  *
- * This is `EnrichmentRegressionError`'s condition out of
- * `src/lib/import/run-import.ts`, applied to the one path that never reaches
- * it. `runImport` fetches *before* it dedupes, so when two Notion rows share a
- * canonical URL and the second one is refused by the publisher, the 403 throws
- * first, `decideAction` routes the row to `notion-body`, and the body path
- * calls `upsertRecipe` directly — bypassing the guard built for exactly this.
- * `upsertRecipe` finds the existing row by `sourceUrl` and updates it in place,
- * and `upsertRecipe` replaces children wholesale: a clean, enriched import with
- * parsed quantities and tags becomes a Notion clipping with `extractionMethod:
- * notion`, `enrichmentApplied: false`, one raw ingredient line and no tags. On
- * the same recipe id, with no error anywhere.
- *
- * The condition is deliberately the same one rather than a second, stricter
- * rule of this file's own: two rules about when a recipe may be overwritten,
- * living in two modules, is how one of them quietly stops matching the other.
- * Like `EnrichmentRegressionError` it only fires when the stored recipe *has*
- * enrichment — a first import that landed unenriched is not worth protecting
- * from a better copy.
+ * Two rules, deliberately distinguishable in the summary: they mean different
+ * things and they imply different next steps. `enrichment-regression` is
+ * temporary — the model will be back and a later run finishes the row.
+ * `clipping-over-extraction` is permanent — no re-run of this migration will
+ * ever be allowed to make that write, and that is the correct answer.
  */
-async function wouldRegressEnrichment(
+type BodyWriteRefusal = {
+  rule: 'clipping-over-extraction' | 'enrichment-regression'
+  reason: string
+}
+
+/**
+ * Whether writing a Notion body copy over whatever already lives at
+ * `sourceUrl` would destroy something better, and if so, why.
+ *
+ * The path this protects exists because `runImport` fetches *before* it
+ * dedupes. When two Notion rows share a canonical URL and the second one is
+ * refused by the publisher, the 403 throws first, `decideAction` routes the row
+ * to `notion-body`, and the body path calls `upsertRecipe` directly. That finds
+ * the first row's recipe by `sourceUrl`, updates it in place, and replaces its
+ * children wholesale — on the same recipe id, with no error anywhere.
+ *
+ * Rule 1, `clipping-over-extraction`: a Notion body may never replace a recipe
+ * that was extracted from the page itself.
+ *
+ * A Notion body is a *clipping* — a lossy, second-hand rendering that someone's
+ * web clipper produced years ago, sometimes hand-retyped since. A JSON-LD or
+ * microdata extraction is the publisher's own structured data, read off the
+ * live page. When we hold both for the same canonical URL the extraction is
+ * better essentially by construction, and enrichment status is beside the
+ * point: an enriched clipping is still a clipping. Checked first because when
+ * it fires, rule 2's advice ("try again when the model is back") would be a
+ * lie — a later run refuses this write too, forever, on purpose.
+ *
+ * Rule 2, `enrichment-regression`: `EnrichmentRegressionError`'s own condition
+ * out of `src/lib/import/run-import.ts`, applied to the one path that never
+ * reaches it. It catches the degraded case rule 1 does not cover — a body copy
+ * landing on top of an *earlier body copy* that did get enriched, where the
+ * model was unavailable this time round. Like the original it only fires when
+ * the stored recipe *has* enrichment: a first import that landed unenriched is
+ * not worth protecting from a better copy.
+ *
+ * What neither rule does is refuse to *create*. A canonical URL with no recipe
+ * behind it writes normally, and a body copy is still free to overwrite an
+ * existing `notion` extraction — re-running the migration after improving
+ * `fromNotionBody` has to be able to improve exactly those rows, which is the
+ * whole point of the parser being improvable.
+ */
+async function refuseBodyDowngrade(
   rt: Runtime,
   sourceUrl: string | null,
   applied: boolean,
-): Promise<boolean> {
-  if (!sourceUrl || applied) return false
+): Promise<BodyWriteRefusal | null> {
+  if (!sourceUrl) return null
+
   const existing = await rt.findBySourceUrl(rt.db, sourceUrl)
-  return existing?.enrichmentApplied === true
+  if (!existing) return null
+
+  if (existing.extractionMethod !== 'notion') {
+    return {
+      rule: 'clipping-over-extraction',
+      reason:
+        `${sourceUrl} already holds a recipe read from the page itself ` +
+        `(${existing.extractionMethod}), and a Notion body is a clipping of that page — ` +
+        'lossy, second-hand, and not an improvement on the publisher\'s own data even when ' +
+        'it enriches. The existing recipe was preserved and nothing was overwritten',
+    }
+  }
+
+  if (!applied && existing.enrichmentApplied) {
+    return {
+      rule: 'enrichment-regression',
+      reason:
+        `the Notion body copy is not enriched and ${sourceUrl} already holds an enriched ` +
+        'recipe; the existing recipe was preserved and nothing was overwritten',
+    }
+  }
+
+  return null
 }
 
 /**
@@ -1821,8 +1872,10 @@ export async function processRow(
   // recipe id, ingredients replaced wholesale by the body's raw lines, tags
   // gone. `runImport` has a guard for precisely this and this path never
   // reaches it, because `runImport` fetches before it dedupes and the fetch is
-  // what failed. So the guard is applied here instead, on the same condition.
-  if (await wouldRegressEnrichment(rt, sourceUrl, applied)) {
+  // what failed. Two rules apply here instead; see `refuseBodyDowngrade` for
+  // what each of them protects and why the reasons are worded differently.
+  const refusal = await refuseBodyDowngrade(rt, sourceUrl, applied)
+  if (refusal) {
     return {
       pageId: row.pageId,
       title,
@@ -1831,9 +1884,7 @@ export async function processRow(
       recipeId: null,
       sourceUrl,
       rowSourceUrl,
-      reason:
-        `the Notion body copy is not enriched and ${sourceUrl} already holds an enriched ` +
-        'recipe; the existing recipe was preserved and nothing was overwritten',
+      reason: refusal.reason,
       at: now(),
     }
   }

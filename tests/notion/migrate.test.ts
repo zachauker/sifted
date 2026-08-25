@@ -929,6 +929,10 @@ describe('processRow — a Notion-body recovery must not overwrite a good recipe
     expect(result.outcome).toBe('skipped')
     expect(result.recipeId).toBeNull()
     expect(result.reason).toMatch(/preserved and nothing was overwritten/)
+    // Both rules are live on this row; the clipping rule is the one reported,
+    // because a later run with a working model still would not be allowed to
+    // make this write and must not be told to try.
+    expect(result.reason).toContain('read from the page itself (jsonld)')
 
     const after = await readRecipe(db, recipeId)
     expect(after.recipe.extractionMethod).toBe('jsonld')
@@ -984,41 +988,120 @@ describe('processRow — a Notion-body recovery must not overwrite a good recipe
     expect(stored.recipe.sourceUrl).toBe('https://getpocket.com/gone')
   })
 
-  it('does not block a body recovery over an existing recipe that was never enriched', async () => {
-    const db = await createTestDb()
-    const url = 'https://example.com/half-a-recipe'
-    await upsertRecipe(db, {
+  /**
+   * A clipping may never replace a recipe read from the page itself, and
+   * enrichment status has nothing to do with it. A Notion body is a lossy,
+   * second-hand rendering a web clipper produced years ago; JSON-LD and
+   * microdata are the publisher's own structured data off the live page. An
+   * enriched clipping is still a clipping.
+   */
+  async function seedExisting(
+    db: TestDb,
+    url: string,
+    over: { extractionMethod: 'jsonld' | 'notion'; enrichmentApplied: boolean },
+  ) {
+    return upsertRecipe(db, {
       extracted: {
-        title: 'Half a recipe',
+        title: 'Whatever is already here',
         description: null,
         author: null,
         publisher: null,
         claimedTimeMinutes: null,
         servings: null,
         yieldText: null,
-        ingredients: [],
-        steps: [],
+        ingredients: [
+          { position: 0, section: null, rawText: '1 head green cabbage', quantity: 1, unit: 'head', item: 'cabbage', note: null },
+        ],
+        steps: [{ position: 0, section: null, text: 'Char it.' }],
         tags: [],
         heroImageUrl: null,
         narrativeHtml: null,
-        extractionMethod: 'jsonld',
+        extractionMethod: over.extractionMethod,
       },
       sourceUrl: url,
       sourceDomain: 'example.com',
-      enrichmentApplied: false,
+      enrichmentApplied: over.enrichmentApplied,
     })
+  }
 
-    const result = await processRow(
-      notionRow({ pageId: 'p-d', title: 'Half a recipe', link: url }),
+  /** A row whose own link is refused, so it falls through to its Notion body. */
+  const blockedRow = (db: TestDb, url: string, llm: LlmClient) =>
+    processRow(
+      notionRow({ pageId: 'p-d', title: 'Clipped copy', link: url }),
       runtime(db, {
         fetchPage: async (u) => {
           throw new BlockedError(u, 403)
         },
       }),
-      noopLlm,
+      llm,
       async () => CABBAGE_BODY,
     )
+
+  it('refuses to replace a real extraction that was never enriched either', async () => {
+    // The enrichment rule alone is silent here: nothing is being regressed,
+    // because there was no enrichment to lose. The clipping still must not win.
+    const db = await createTestDb()
+    const url = 'https://example.com/half-a-recipe'
+    const id = await seedExisting(db, url, { extractionMethod: 'jsonld', enrichmentApplied: false })
+
+    const result = await blockedRow(db, url, noopLlm)
+
+    expect(result.outcome).toBe('skipped')
+    expect(result.reason).toContain('read from the page itself (jsonld)')
+    expect((await readRecipe(db, id)).recipe.extractionMethod).toBe('jsonld')
+  })
+
+  it('refuses even when the clipping itself enriched — the common case in a healthy run', async () => {
+    // The gap the enrichment rule left open. With a working model the body copy
+    // enriches, so nothing regresses by that measure, and the clipping would
+    // have quietly replaced the publisher's own structured data.
+    const db = await createTestDb()
+    const url = 'https://example.com/enriched-clipping'
+    const id = await seedExisting(db, url, { extractionMethod: 'jsonld', enrichmentApplied: true })
+
+    const result = await blockedRow(db, url, enrichingLlm())
+
+    expect(result.outcome).toBe('skipped')
+    expect(result.reason).toContain('read from the page itself (jsonld)')
+    const after = await readRecipe(db, id)
+    expect(after.recipe.extractionMethod).toBe('jsonld')
+    expect(after.ingredients.map((i) => i.rawText)).toEqual(['1 head green cabbage'])
+  })
+
+  it('lets a body copy overwrite an earlier body copy, so the parser can be improved', async () => {
+    // Not a downgrade: re-running the migration after improving
+    // `fromNotionBody` has to be able to improve exactly these rows.
+    const db = await createTestDb()
+    const url = 'https://getpocket.com/gone'
+    const id = await seedExisting(db, url, { extractionMethod: 'notion', enrichmentApplied: false })
+
+    const result = await blockedRow(db, url, noopLlm)
+
     expect(result.outcome).toBe('body-recovered')
+    expect(result.recipeId).toBe(id)
+    expect((await readRecipe(db, id)).ingredients.map((i) => i.rawText)).toEqual(['cabbage'])
+  })
+
+  it('still refuses an unenriched body copy over an enriched earlier one, with the other reason', async () => {
+    // The clipping rule does not fire — both sides are `notion` — so the
+    // enrichment rule is what speaks here, and it says something different,
+    // because this one *is* worth retrying once the model is back.
+    const db = await createTestDb()
+    const url = 'https://getpocket.com/also-gone'
+    await seedExisting(db, url, { extractionMethod: 'notion', enrichmentApplied: true })
+
+    const result = await blockedRow(db, url, noopLlm)
+
+    expect(result.outcome).toBe('skipped')
+    expect(result.reason).toContain('the Notion body copy is not enriched')
+    expect(result.reason).not.toContain('read from the page itself')
+  })
+
+  it('writes normally when no recipe exists at that URL — this rule never refuses to create', async () => {
+    const db = await createTestDb()
+    const result = await blockedRow(db, 'https://example.com/nothing-here-yet', noopLlm)
+    expect(result.outcome).toBe('body-recovered')
+    expect(result.recipeId).not.toBeNull()
   })
 })
 
