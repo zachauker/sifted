@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, it, expect, vi } from 'vitest'
 import { extract } from './index'
 import type { LlmClient } from './llm-types'
+import type { ExtractedRecipe } from './types'
 
 /**
  * Regression tests against real, frozen pages captured by
@@ -35,6 +36,23 @@ function loadFixture(name: string): string {
   return gunzipSync(readFileSync(fixturePath(name))).toString('utf-8')
 }
 
+/**
+ * The product promise is "recipe at the top, story collapsed at the bottom", so
+ * the narrative must contain neither the steps nor the ingredient lines that were
+ * already extracted into structured fields. Asserted against the recipe's own
+ * output rather than hand-copied strings, so it keeps holding if a fixture is
+ * refreshed.
+ */
+function expectNoRecipeDuplication(result: ExtractedRecipe): void {
+  expect(result.narrativeHtml).not.toBeNull()
+  for (const step of result.steps) {
+    expect(result.narrativeHtml).not.toContain(step.text)
+  }
+  for (const ingredient of result.ingredients) {
+    expect(result.narrativeHtml).not.toContain(ingredient.rawText)
+  }
+}
+
 describe('fixtures: bonappetit.com/recipe/bas-best-bolognese', () => {
   const name = 'bonappetit-bolognese'
   const url = 'https://www.bonappetit.com/recipe/bas-best-bolognese'
@@ -52,26 +70,21 @@ describe('fixtures: bonappetit.com/recipe/bas-best-bolognese', () => {
     expect(result.steps[0].text).toContain('Pulse 1 medium onion, chopped')
 
     // Bon Appétit's JSON-LD serves totalTime as free-text ("3 hours") rather than
-    // an ISO 8601 duration ("PT3H"), so the strict schema.org parser in
-    // duration.ts correctly yields null here -- this is real upstream data, not
-    // a malformed fixture, and documents a known gap: real cook times are lost
-    // for Condé Nast recipes.
-    expect(result.claimedTimeMinutes).toBeNull()
+    // an ISO 8601 duration ("PT3H"). duration.ts's freeform fallback parses it.
+    expect(result.claimedTimeMinutes).toBe(180)
 
     expect(result.heroImageUrl).toMatch(/^https:\/\/assets\.bonappetit\.com\//)
     expect(result.tags).toContainEqual({ facet: 'cuisine', value: 'italian' })
     expect(result.tags).toContainEqual({ facet: 'course', value: 'main' })
 
-    // Confirmed by manual inspection: for this page, Readability's output is not
-    // narrative prose. Bon Appétit's recipe-card markup matches none of
-    // narrative.ts's RECIPE_CARD_SELECTORS, so the full step-by-step
-    // instructions survive into "narrative" and duplicate the structured
-    // extraction verbatim (formatted as "<h4>Step 1</h4>..."). Asserting the
-    // presence of that duplication here pins the known-bad behavior so a future
-    // fix to narrative.ts's selector list shows up as a meaningful test change
-    // rather than silent drift.
-    expect(result.narrativeHtml).toContain('Step 1')
-    expect(result.narrativeHtml).toContain('Pulse')
+    // The narrative is the editor's headnote, not the recipe a second time.
+    // Asserting the real prose is load-bearing: an empty narrative would satisfy
+    // "contains no steps" while quietly throwing away the story this feature
+    // exists to keep.
+    expect(result.narrativeHtml).toContain('standout ragù alla Bolognese')
+    expect(result.narrativeHtml).toContain('What it does take is patience')
+    expect(result.narrativeHtml).not.toContain('Step 1')
+    expectNoRecipeDuplication(result)
   })
 })
 
@@ -87,11 +100,18 @@ describe('fixtures: bonappetit.com/recipe/slow-roast-gochujang-chicken', () => {
     expect(result.servings).toBe(4)
     expect(result.ingredients).toHaveLength(11)
     expect(result.steps).toHaveLength(11)
-    expect(result.claimedTimeMinutes).toBeNull() // same free-text totalTime issue
+    // No data upstream, not a parser failure: this page's JSON-LD carries no
+    // totalTime, prepTime, or cookTime at all.
+    expect(result.claimedTimeMinutes).toBeNull()
 
     expect(result.heroImageUrl).toMatch(/^https:\/\/assets\.bonappetit\.com\//)
     expect(result.tags).toContainEqual({ facet: 'cuisine', value: 'korean' })
     expect(result.tags).toContainEqual({ facet: 'ingredient', value: 'chicken' })
+
+    expect(result.narrativeHtml).toContain('crisp-skinned, high-heat roast chicken')
+    expect(result.narrativeHtml).toContain('nearly-confited potatoes')
+    expect(result.narrativeHtml).not.toContain('Step 1')
+    expectNoRecipeDuplication(result)
   })
 })
 
@@ -110,15 +130,19 @@ describe('fixtures: bonappetit.com/recipe/cheesy-cabbage-gratin', () => {
     expect(result.heroImageUrl).toMatch(/^https:\/\/assets\.bonappetit\.com\//)
     expect(result.tags).toContainEqual({ facet: 'ingredient', value: 'cheese' })
 
-    // Confirmed by manual inspection: unlike a genuine narrative, this "content"
-    // is the whole recipe-page DOM -- publish date, star rating, ingredient
-    // list, and full instructions -- because none of narrative.ts's card
-    // selectors match Bon Appétit's markup. The single real editorial sentence
-    // on the page is buried inside it.
+    // No data upstream: no totalTime, prepTime, or cookTime in this page's JSON-LD.
+    expect(result.claimedTimeMinutes).toBeNull()
+
+    // The thinnest page of the five -- one editorial sentence against a full
+    // recipe -- and therefore the one that catches an over-eager fix. Keeping
+    // that sentence is the point; a narrative that came back empty here would
+    // pass a steps-are-gone assertion while failing the user.
     expect(result.narrativeHtml).toContain(
       'Every editor who claimed this cheesy gratin would be',
     )
-    expect(result.narrativeHtml).toContain('Step 1')
+    expect(result.narrativeHtml).toContain('going back for seconds and thirds')
+    expect(result.narrativeHtml).not.toContain('Step 1')
+    expectNoRecipeDuplication(result)
   })
 })
 
@@ -132,7 +156,7 @@ describe('fixtures: easyweeknightrecipes.com/homemade-flatbread-recipe', () => {
     expect(result.extractionMethod).toBe('jsonld')
     expect(result.title).toBe('Homemade Flatbread Recipe')
     expect(result.servings).toBe(10)
-    expect(result.claimedTimeMinutes).toBe(60)
+    expect(result.claimedTimeMinutes).toBe(60) // ISO 8601 "PT60M" upstream
     expect(result.ingredients).toHaveLength(12)
     expect(result.steps).toHaveLength(9)
     expect(result.heroImageUrl).toBe(
@@ -140,11 +164,14 @@ describe('fixtures: easyweeknightrecipes.com/homemade-flatbread-recipe', () => {
     )
     expect(result.tags).toContainEqual({ facet: 'course', value: 'bread' })
 
-    // WordPress Recipe Maker markup matches narrative.ts's selectors, so unlike
-    // the Bon Appétit fixtures, the narrative here is genuinely prose -- no
-    // recipe-step or ingredient-list duplication.
+    // WordPress Recipe Maker markup matches narrative.ts's selectors, so this
+    // fixture was already clean before the Condé Nast fix. It is pinned here as
+    // the regression guard for that fix: losing prose on the publishers that
+    // already worked would be worse than the bug being fixed.
     expect(result.narrativeHtml).toContain('cherished comfort food')
+    expect(result.narrativeHtml).toContain('Why You’ll Love This Easy Flatbread Recipe')
     expect(result.narrativeHtml).not.toContain('Step 1')
+    expectNoRecipeDuplication(result)
   })
 })
 
@@ -158,7 +185,7 @@ describe('fixtures: cafedelites.com/creamy-garlic-butter-tuscan-shrimp', () => {
     expect(result.extractionMethod).toBe('jsonld')
     expect(result.title).toBe('Creamy Garlic Butter Tuscan Shrimp')
     expect(result.servings).toBe(4)
-    expect(result.claimedTimeMinutes).toBe(20)
+    expect(result.claimedTimeMinutes).toBe(20) // ISO 8601 "PT20M" upstream
     expect(result.ingredients).toHaveLength(15)
     expect(result.steps).toHaveLength(6)
     expect(result.ingredients[0].rawText).toContain('salted butter')
@@ -168,7 +195,11 @@ describe('fixtures: cafedelites.com/creamy-garlic-butter-tuscan-shrimp', () => {
     )
     expect(result.tags).toContainEqual({ facet: 'ingredient', value: 'seafood' })
 
+    // Second regression guard for the Tasty Recipes / WPRM path -- see the
+    // flatbread fixture.
     expect(result.narrativeHtml).toContain('Tuscan Butter Shrimp')
+    expect(result.narrativeHtml).toContain('sun-dried tomatoes and spinach')
     expect(result.narrativeHtml).not.toContain('Step 1')
+    expectNoRecipeDuplication(result)
   })
 })

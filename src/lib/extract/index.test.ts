@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { extract } from './index'
+import { extract, NoRecipeFoundError } from './index'
 import type { LlmClient } from './llm-types'
 
 const noopLlm: LlmClient = {
@@ -168,6 +168,24 @@ describe('extract: hero image URL resolution', () => {
     expect(await heroFor(undefined)).toBeNull()
   })
 
+  /**
+   * `new URL` validates syntax, not scheme, so these resolve happily and would be
+   * stored verbatim. Nothing renders the field yet, which is precisely why the
+   * allowlist is cheap to add now.
+   */
+  it('rejects a javascript: image URL', async () => {
+    expect(await heroFor('javascript:alert(1)')).toBeNull()
+  })
+
+  it('rejects a file: image URL', async () => {
+    expect(await heroFor('file:///etc/passwd')).toBeNull()
+  })
+
+  it('rejects other non-web schemes', async () => {
+    expect(await heroFor('vbscript:msgbox(1)')).toBeNull()
+    expect(await heroFor('blob:https://example.com/9d7b')).toBeNull()
+  })
+
   it('resolves a relative microdata image too', async () => {
     const html = `<html><body>
       <div itemscope itemtype="http://schema.org/Recipe">
@@ -180,3 +198,109 @@ describe('extract: hero image URL resolution', () => {
     expect(result.heroImageUrl).toBe('https://example.com/img/sauce.jpg')
   })
 })
+
+/**
+ * `fromJsonLd` never returns null: `{"@type":"Recipe"}` with no content still
+ * yields a recipe titled "Untitled recipe". Without a usability guard the `??`
+ * chain stops on that stub, so microdata and the LLM never run and an empty
+ * recipe is stored looking successfully extracted -- a permanent silent hole in
+ * the user's library rather than a visible failure.
+ */
+describe('extract: stub structured data does not short-circuit the chain', () => {
+  const stubJsonLd = `<script type="application/ld+json">{"@type":"Recipe"}</script>`
+
+  const microdataCard = `<div itemscope itemtype="http://schema.org/Recipe">
+      <h1 itemprop="name">KC Barbecue Sauce</h1>
+      <li itemprop="recipeIngredient">2 cups ketchup</li>
+    </div>`
+
+  it('falls through a stub JSON-LD node to a real microdata card', async () => {
+    // The shape a WordPress SEO plugin produces: a content-free Recipe node in
+    // the head while the actual recipe lives in the WPRM microdata card.
+    const html = `<html><head>${stubJsonLd}</head><body>${microdataCard}</body></html>`
+
+    const result = await extract({ url: 'https://example.com/sauce', html, llm: noopLlm })
+    expect(result.extractionMethod).toBe('microdata')
+    expect(result.title).toBe('KC Barbecue Sauce')
+    expect(result.ingredients[0].rawText).toBe('2 cups ketchup')
+  })
+
+  it('falls through a stub JSON-LD node to the LLM when there is no microdata', async () => {
+    const llm: LlmClient = {
+      enrich: vi.fn().mockResolvedValue(null),
+      extractRecipe: vi.fn().mockResolvedValue({
+        title: 'Grandma Peanut Dip',
+        description: null,
+        author: null,
+        claimedTimeMinutes: 10,
+        servings: 4,
+        yieldText: '4 servings',
+        ingredients: ['1 cup peanuts'],
+        steps: ['Blend everything.'],
+      }),
+    }
+    const html = `<html><head>${stubJsonLd}</head><body><p>A story, no recipe markup.</p></body></html>`
+
+    const result = await extract({ url: 'https://example.com/dip', html, llm })
+    expect(result.extractionMethod).toBe('llm')
+    expect(result.title).toBe('Grandma Peanut Dip')
+    expect(llm.extractRecipe).toHaveBeenCalledOnce()
+  })
+
+  /**
+   * `fromMicrodata` already rejects a nameless scope, but has the same hole one
+   * level down: a scope with a name and nothing else.
+   */
+  it('falls through a named but empty microdata scope', async () => {
+    const llm: LlmClient = {
+      enrich: vi.fn().mockResolvedValue(null),
+      extractRecipe: vi.fn().mockResolvedValue(null),
+    }
+    const html = `<html><body>
+      <div itemscope itemtype="http://schema.org/Recipe"><h1 itemprop="name">Mystery Dish</h1></div>
+    </body></html>`
+
+    await expect(extract({ url: 'https://example.com/x', html, llm })).rejects.toThrow(
+      /no recipe found/i,
+    )
+    expect(llm.extractRecipe).toHaveBeenCalledOnce()
+  })
+
+  it('still throws when every path comes back empty', async () => {
+    const html = `<html><head>${stubJsonLd}</head><body><p>nothing here</p></body></html>`
+
+    await expect(extract({ url: 'https://example.com/x', html, llm: noopLlm })).rejects.toThrow(
+      NoRecipeFoundError,
+    )
+  })
+
+  /**
+   * Ingredients OR steps, never AND. A spice blend is a list of ingredients with
+   * nothing to do; both halves exist in the wild, and only neither-nor is a
+   * non-recipe.
+   */
+  it('accepts a recipe with ingredients but no steps', async () => {
+    const html = `<html><head><script type="application/ld+json">
+      {"@type":"Recipe","name":"House Spice Blend","recipeIngredient":["2 Tbsp. cumin","1 Tbsp. coriander"]}
+    </script></head><body><p>hi</p></body></html>`
+
+    const result = await extract({ url: 'https://example.com/blend', html, llm: noopLlm })
+    expect(result.extractionMethod).toBe('jsonld')
+    expect(result.title).toBe('House Spice Blend')
+    expect(result.steps).toHaveLength(0)
+    expect(result.ingredients).toHaveLength(2)
+  })
+
+  it('accepts a recipe with steps but no ingredients', async () => {
+    const html = `<html><head><script type="application/ld+json">
+      {"@type":"Recipe","name":"How to Temper Chocolate",
+       "recipeInstructions":[{"@type":"HowToStep","text":"Melt two thirds of the chocolate."}]}
+    </script></head><body><p>hi</p></body></html>`
+
+    const result = await extract({ url: 'https://example.com/temper', html, llm: noopLlm })
+    expect(result.extractionMethod).toBe('jsonld')
+    expect(result.ingredients).toHaveLength(0)
+    expect(result.steps).toHaveLength(1)
+  })
+})
+
