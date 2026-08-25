@@ -2869,7 +2869,131 @@ git commit -m "docs: add iOS Shortcut setup and record the deployed-fetch result
 - Enrichment failure produces a stored recipe with `enrichment_applied = false`, not a failed import.
 - The deployed-fetch answer for Bon Appétit is recorded.
 
+## Verified end to end (local, 2026-08-25)
+
+The pipeline was run against live pages with a real `fetchPage` and a real
+`ingestHeroImage`, a temp-file database, an in-memory blob store, and a no-op
+LLM. Everything below is measured, not asserted by a test double:
+
+```
+job          : done  (1733ms)
+title        : Slow-Roast Gochujang Chicken
+publisher    : Bon Appétit | author: Molly Baz
+sourceUrl    : https://bonappetit.com/recipe/slow-roast-gochujang-chicken
+servings     : 4      method: jsonld      encoding: utf-8
+ingredients  : 11     first: 1 3½–4-lb. whole chicken
+steps        : 11     narrative: 731 chars
+tags         : course:main, cuisine:korean, ingredient:chicken,
+               ingredient:potato, method:oven
+image        : 4496x2529  recipes/<id>/hero.webp
+archive      : 214,656 B gzipped from 1,629,145 B raw
+
+re-share same URL  -> job duplicate, recipeId matches, 1 recipe row
+allrecipes.com     -> job failed / blocked, no recipe row created
+```
+
+`claimedTimeMinutes` is null for that recipe because its JSON-LD carries no
+`totalTime`, `prepTime`, or `cookTime` at all — correct behavior, not a gap.
+
+**What this does NOT cover, and what Task 15 still has to do:**
+
+1. A real Turso database rather than a local file — in particular whether a
+   concurrent duplicate import surfaces `UNIQUE constraint failed` over HTTP
+   instead of the local driver's `SQLITE_BUSY`.
+2. A real `ANTHROPIC_API_KEY`, so enrichment actually runs and
+   `enrichmentApplied` becomes true.
+3. Vercel Blob rather than the in-memory store.
+4. The HTTP layer: bearer auth, the 202 response, and `waitUntil` under a real
+   serverless runtime.
+5. **The deployed-fetch question inherited from plan 1.** Bon Appétit fetches
+   fine from a residential IP, as above. Condé Nast blocks *datacenter* ranges,
+   so this says nothing about Vercel. One import from a deployed function
+   settles whether phone-supplied HTML is a rare fallback or the primary capture
+   path for 28% of the library.
+
+## Findings during execution
+
+- **libsql `:memory:` cannot test transactional code.** `transaction()` hands its
+  open connection to the transaction and sets the client's handle to null, so
+  the next statement lazily opens a **new** connection. Against a file both see
+  the same database; against `:memory:` the new connection is a brand-new empty
+  one. Measured: 15 tables after migrate, 15 inside the transaction, **0 after
+  it** — every assertion failed with `no such table: recipes` *after*
+  `upsertRecipe` returned successfully. `tests/helpers/db.ts` therefore uses a
+  throwaway temp file per test, cleaned up on exit. **Do not "simplify" it back
+  to `:memory:`** — doing so silently disables every transactional test.
+  Shared-cache is not an escape: `@libsql/core` rejects `mode=memory`, and the
+  permitted `cache=shared` form is process-wide and would destroy per-test
+  isolation.
+
+- **A concurrent import of the same new URL surfaces `SQLITE_BUSY` locally, not
+  a UNIQUE violation** — the loser never acquires the write lock. Turso over
+  HTTP will likely surface `UNIQUE constraint failed: recipes.source_url`
+  instead. Any code that wants to report "duplicate" distinctly must handle
+  **both**, and should be verified against real Turso rather than the local
+  driver.
+
+- **The `DUMMY_HASH` timing guard copied from `gridiron-picks` was inert.** Its
+  payload was 54 characters where bcrypt requires 53, so `compare()` returned in
+  ~0.0ms instead of ~271ms — a single login request revealed whether an email
+  was registered. Replaced with a real 12-round hash and verified by
+  measurement. The same defect exists in the source project.
+
+- **Login was case-sensitive on email.** The seed script lowercases on write;
+  `authorize` looked up the raw input, and SQLite's default collation is
+  BINARY. `Foo@Example.com` would not have matched a stored `foo@example.com`.
+  Both sides now normalize.
+
+## Decisions made during execution
+
+Findings raised by implementers and deliberately declined, recorded so they are
+not silently re-raised or silently fixed later.
+
+- **A revoked token that is presented again leaves no trace.** `verifyToken`
+  filters on `revokedAt IS NULL`, so it returns null before stamping
+  `lastUsedAt`. Arguably a stolen phone still trying is the more interesting
+  security signal. Declined: there is no alerting or audit surface to consume
+  it, and recording a timestamp nobody reads is observability without a
+  consumer. Revisit only if an audit view is ever built.
+
+- **Text enums are enforced by TypeScript, not by SQLite CHECK constraints.**
+  `status`, `extractionMethod`, `facet`, `role`, and `failureKind` accept any
+  string from raw SQL or a bad cast. Declined: Drizzle generates no CHECK for
+  these, so adding them means hand-editing generated migrations, which then
+  drift from the schema snapshot and break future `db:generate`. Every write
+  goes through typed code, and the drift cost outweighs the residual risk for a
+  two-user app.
+
+- **`searchRecipes` sanitizes rather than the UI.** Raw input to FTS5 `MATCH`
+  throws on ordinary inputs — a bare `and`, a stray `(`. This is fixed at the
+  query layer, next to the table, rather than left for the search box in plan 3.
+
 ## Handoff to plan 3
+
+- **A redirected failed job's archive is not findable from the job row.** The
+  import route stores `normalizeSourceUrl(sharedUrl)` on the job; the archive
+  key is derived from `normalizeSourceUrl(page.finalUrl)`. For a shortened or
+  canonicalizing link those differ, so hashing `import_jobs.url` misses the
+  blob. Blocked and non-redirect cases — the common ones — are fine. Fixing it
+  properly means recording the resolved URL on the job, which is a column.
+
+- **`markFailed` does not clear `recipeId`.** Combined with
+  `isDeliberateUpdate`'s "the job already points at this recipe" clause, that
+  means once a job has succeeded, every later retry bypasses the dedupe check
+  regardless of `allowExistingUpdate`. Arguably correct, but it narrows the
+  flag's load-bearing case to jobs that have never succeeded — narrower than the
+  code comment implies.
+
+- **`tests/integration/blocked-recovery.test.ts` shares one database** across
+  its tests, because route modules capture `db` at import time. Its cases stay
+  isolated by using distinct URLs. A third test must do the same or state will
+  bleed.
+
+- **`enrichment_applied` now has a consumer** — `npm run unenriched` lists
+  recipes that stored without parsed quantities or tags, which is how a
+  rate-limited migration is detected and repaired. Run it after the migration.
+
+
 
 Plan 3 builds the UI (library grid with the filter rail, recipe page, needs-attention screens) and migrates the 156 Notion recipes.
 

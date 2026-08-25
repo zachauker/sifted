@@ -130,3 +130,21 @@ describe('correctness fixes', () => {
     expect(normalizeTag('Soup & Stew')).toEqual({ facet: 'tag', value: 'soup' })
   })
 })
+
+describe('normalizeTags result ownership', () => {
+  it('returns copies the caller may extend', () => {
+    const [tag] = normalizeTags(['Main Course'])
+    expect(() => Object.assign(tag, { recipeId: 'abc' })).not.toThrow()
+  })
+
+  it('does not share tag objects between calls', () => {
+    const [a] = normalizeTags(['Main Course'])
+    const [b] = normalizeTags(['Main Course'])
+    expect(a).toEqual(b)
+    expect(a).not.toBe(b)
+  })
+
+  it('still returns a frozen object from normalizeTag itself', () => {
+    expect(Object.isFrozen(normalizeTag('Main Course'))).toBe(true)
+  })
+})

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { extract, NoRecipeFoundError } from './index'
+import { extract, LlmUnavailableError, NoRecipeFoundError } from './index'
 import type { LlmClient } from './llm-types'
 
 const noopLlm: LlmClient = {
@@ -356,3 +356,69 @@ describe('extract: claimedTimeMinutes falls back to prepTime + cookTime', () => 
   })
 })
 
+
+describe('extract: an unanswered model is not an absent recipe', () => {
+  const plainPage = '<html><body><article><p>Opinions about kitchen renovations.</p></article></body></html>'
+
+  it('throws LlmUnavailableError when the extractor rejects', async () => {
+    const llm: LlmClient = {
+      enrich: vi.fn().mockResolvedValue(null),
+      extractRecipe: vi.fn().mockRejectedValue(new Error('429 rate limited')),
+    }
+
+    // Not NoRecipeFoundError: nothing ever read the page, so this run knows
+    // nothing about whether a recipe is on it. Collapsing the two files an
+    // outage as a permanent property of the URL.
+    await expect(
+      extract({ url: 'https://example.com/x', html: plainPage, llm }),
+    ).rejects.toBeInstanceOf(LlmUnavailableError)
+    await expect(
+      extract({ url: 'https://example.com/x', html: plainPage, llm }),
+    ).rejects.not.toBeInstanceOf(NoRecipeFoundError)
+  })
+
+  it('keeps the original rejection as the cause', async () => {
+    const boom = new Error('429 rate limited')
+    const llm: LlmClient = {
+      enrich: vi.fn().mockResolvedValue(null),
+      extractRecipe: vi.fn().mockRejectedValue(boom),
+    }
+
+    const error = await extract({ url: 'https://example.com/x', html: plainPage, llm })
+      .then(() => null, (e: unknown) => e)
+    expect((error as Error).cause).toBe(boom)
+  })
+
+  it('still throws NoRecipeFoundError when the model answers with an empty title', async () => {
+    const llm: LlmClient = {
+      enrich: vi.fn().mockResolvedValue(null),
+      extractRecipe: vi.fn().mockResolvedValue({
+        title: '   ',
+        description: null,
+        author: null,
+        claimedTimeMinutes: null,
+        servings: null,
+        yieldText: null,
+        ingredients: ['2 eggs'],
+        steps: ['Boil them.'],
+      }),
+    }
+
+    // The model looked and found nothing. That is a real answer, and a retry
+    // will never change it.
+    await expect(
+      extract({ url: 'https://example.com/x', html: plainPage, llm }),
+    ).rejects.toBeInstanceOf(NoRecipeFoundError)
+  })
+
+  it('still throws NoRecipeFoundError when the response fails schema validation', async () => {
+    const llm: LlmClient = {
+      enrich: vi.fn().mockResolvedValue(null),
+      extractRecipe: vi.fn().mockResolvedValue({ nothing: true }),
+    }
+
+    await expect(
+      extract({ url: 'https://example.com/x', html: plainPage, llm }),
+    ).rejects.toBeInstanceOf(NoRecipeFoundError)
+  })
+})

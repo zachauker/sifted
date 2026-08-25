@@ -11,7 +11,12 @@ const TIMEOUT_MS = 20_000
 // Appétit: 1.36/1.63/1.25 MB; two WordPress food blogs: ~600 KB each), so
 // 3 MB is roughly 2x the largest real page observed and bounds worst-case
 // memory to something a serverless function survives.
-const MAX_BYTES = 3 * 1024 * 1024
+// Exported so that any other code path admitting HTML into the extraction
+// pipeline (e.g. the import routes' supplied/pasted-HTML cap) can cap at the
+// same size instead of redeclaring a number that can drift from this one —
+// the memory ceiling documented above applies regardless of how the HTML
+// arrived.
+export const MAX_BYTES = 3 * 1024 * 1024
 
 // How much of the body to scan for a `<meta charset>` declaration. The HTML
 // spec's own prescan caps at 1024 bytes; we allow a little more because real
