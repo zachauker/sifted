@@ -67,6 +67,89 @@ describe('applyNotionMetadata', () => {
     expect(await tagsOf()).toEqual(['course:bread', 'method:oven'])
   })
 
+  it('stamps the tags it writes as notion-owned', async () => {
+    await applyNotionMetadata(db, recipeId, {
+      rating: null, status: null, tags: [{ facet: 'cuisine', value: 'italian' }],
+    })
+    const rows = await db.select().from(recipeTags).where(eq(recipeTags.recipeId, recipeId))
+    expect(rows.find((t) => t.value === 'italian')?.source).toBe('notion')
+  })
+
+  // Extraction and Notion agreeing on `course:bread` is not a conflict about
+  // the tag — both want it present — it is a question of who owns it, and the
+  // unique constraint means only one row can answer. Ownership escalates to
+  // Notion: the tag is one the user curated by hand, and leaving it stamped
+  // `extracted` would put it back in the path of the very re-import this whole
+  // change exists to survive. Escalation only ever moves up the ladder
+  // (extracted -> notion -> user); nothing here can demote a `user` tag.
+  it('takes ownership of a tag extraction already produced rather than leaving it extracted', async () => {
+    await applyNotionMetadata(db, recipeId, {
+      rating: null, status: null, tags: [{ facet: 'course', value: 'bread' }],
+    })
+
+    const rows = await db.select().from(recipeTags).where(eq(recipeTags.recipeId, recipeId))
+    expect(rows).toHaveLength(1)
+    expect(rows[0].source).toBe('notion')
+
+    // And the point of all that: the repair procedure no longer eats it.
+    await upsertRecipe(db, {
+      extracted: { ...extracted, tags: [] },
+      sourceUrl: 'https://example.com/flatbread', sourceDomain: 'example.com',
+    })
+    expect(await tagsOf()).toEqual(['course:bread'])
+  })
+
+  it('never demotes a user-owned tag it happens to duplicate', async () => {
+    await db.insert(recipeTags)
+      .values({ recipeId, facet: 'tag', value: 'weeknight', source: 'user' })
+    await applyNotionMetadata(db, recipeId, {
+      rating: null, status: null, tags: [{ facet: 'tag', value: 'weeknight' }],
+    })
+    const rows = await db.select().from(recipeTags).where(eq(recipeTags.recipeId, recipeId))
+    expect(rows.find((t) => t.value === 'weeknight')?.source).toBe('user')
+  })
+
+  /* ---------------------------------------------------------------------- */
+  /* Null means "Notion had nothing here", not "clear what you have"          */
+  /* ---------------------------------------------------------------------- */
+
+  // Two Notion rows whose links canonicalize to the same URL land on the same
+  // recipe. The second row carries no rating, and a plain `.set()` let it
+  // erase the rating the first row supplied — one of the three fields that
+  // only ever existed in Notion and cannot be recovered from anywhere else.
+  it('does not clear an existing rating when the incoming rating is null', async () => {
+    await applyNotionMetadata(db, recipeId, { rating: 5, status: 'made_it', tags: [] })
+    await applyNotionMetadata(db, recipeId, { rating: null, status: null, tags: [] })
+
+    const [row] = await db.select().from(recipes).where(eq(recipes.id, recipeId))
+    expect(row.rating).toBe(5)
+    expect(row.status).toBe('made_it')
+  })
+
+  it('does not clear an existing status when only the status is null', async () => {
+    await applyNotionMetadata(db, recipeId, { rating: 5, status: 'made_it', tags: [] })
+    await applyNotionMetadata(db, recipeId, { rating: 3, status: null, tags: [] })
+
+    const [row] = await db.select().from(recipes).where(eq(recipes.id, recipeId))
+    expect(row.rating).toBe(3)
+    expect(row.status).toBe('made_it')
+  })
+
+  it('still sets a rating and status on a recipe that has none', async () => {
+    await applyNotionMetadata(db, recipeId, { rating: 4, status: 'want_to_make', tags: [] })
+    const [row] = await db.select().from(recipes).where(eq(recipes.id, recipeId))
+    expect(row.rating).toBe(4)
+    expect(row.status).toBe('want_to_make')
+  })
+
+  it('still overwrites an existing rating and status with real incoming values', async () => {
+    await applyNotionMetadata(db, recipeId, { rating: 2, status: 'want_to_make', tags: [] })
+    await applyNotionMetadata(db, recipeId, { rating: 5, status: 'made_it', tags: [] })
+    const [row] = await db.select().from(recipes).where(eq(recipes.id, recipeId))
+    expect(row.rating).toBe(5)
+    expect(row.status).toBe('made_it')
+  })
+
   it('does not disturb the recipe a re-import would preserve', async () => {
     await applyNotionMetadata(db, recipeId, { rating: 3, status: 'made_it', tags: [] })
     const [row] = await db.select().from(recipes).where(eq(recipes.id, recipeId))

@@ -15,6 +15,13 @@
       "when": 1787678182609,
       "tag": "0001_recipes_fts",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1787687248900,
+      "tag": "0002_wealthy_hydra",
+      "breakpoints": true
     }
   ]
 }

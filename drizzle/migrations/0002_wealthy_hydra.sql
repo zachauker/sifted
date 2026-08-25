@@ -1,0 +1,11 @@
+-- `recipe_tags` has no `id` column and rides SQLite's implicit rowid, so this is
+-- a plain ADD COLUMN: no table rebuild, no rowid churn, existing rows keep their
+-- identity and their foreign key. A NOT NULL column with a constant default is
+-- exactly the case SQLite can add in place.
+--
+-- Every existing row backfills to 'extracted', which is right for a database
+-- where only `upsertRecipe` has ever written tags. If the Notion migration has
+-- already been run against a database, re-run it after this migration: it is
+-- idempotent, and it re-stamps its own tags as 'notion' so a later repair
+-- re-import leaves them alone.
+ALTER TABLE `recipe_tags` ADD `source` text DEFAULT 'extracted' NOT NULL;
