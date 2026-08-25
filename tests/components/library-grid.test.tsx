@@ -3,15 +3,18 @@
 // The only tests in this repo that need a DOM. Everything else runs in the
 // node environment configured in `vitest.config.mts`; this docblock opts
 // just this file into jsdom.
-import { describe, it, expect, afterEach } from 'vitest'
-import { cleanup, render, screen, within } from '@testing-library/react'
+import { describe, it, expect, afterEach, vi } from 'vitest'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import '@testing-library/jest-dom/vitest'
 import type { LibraryEntry } from '@/lib/db/queries/library'
 import { EMPTY_FILTER_STATE, parseFilterState } from '@/lib/library/filter'
 import { LibraryView } from '@/components/library/library-view'
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  vi.unstubAllGlobals()
+})
 
 let counter = 0
 function entry(overrides: Partial<LibraryEntry> = {}): LibraryEntry {
@@ -224,5 +227,128 @@ describe('the URL', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'Clear all' }))
     expect(window.location.search).toBe('')
+  })
+})
+
+describe('search', () => {
+  /**
+   * Built fresh per test (rather than a module-level constant) so each
+   * test can read back the real `id` the shared `entry()` counter assigned
+   * — needed to build a realistic `/api/search` mock response.
+   */
+  function library() {
+    const salmon = entry({
+      title: 'Miso Butter Salmon',
+      slug: 'miso-butter-salmon',
+      tags: ['course:main', 'ingredient:seafood'],
+    })
+    const chana = entry({ title: 'Chana Masala', slug: 'chana-masala', tags: ['course:main'] })
+    const ragu = entry({
+      title: 'Sunday Ragù',
+      slug: 'sunday-ragu',
+      publisher: 'Bon Appétit',
+      tags: ['course:main'],
+    })
+    return { salmon, chana, ragu, all: [salmon, chana, ragu] }
+  }
+
+  function searchBox() {
+    return screen.getByRole('searchbox', { name: /search recipes/i })
+  }
+
+  it('filters locally and instantly while typing, and names the tier that produced the results', async () => {
+    renderLibrary(library().all)
+
+    await userEvent.type(searchBox(), 'salmon')
+
+    expect(cardTitles()).toEqual(['Miso Butter Salmon'])
+    expect(screen.getByText(/matched titles, publishers, and tags/i)).toBeInTheDocument()
+  })
+
+  it('composes with the filter rail: narrows the already-filtered set rather than replacing it', async () => {
+    renderLibrary(library().all)
+
+    // All three recipes are `course:main`, so selecting it should not
+    // change what's on screen yet.
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Main, 3 recipes' }))
+    expect(cardTitles()).toHaveLength(3)
+
+    // Salmon is also a main, but the query only matches Chana Masala's
+    // title — proving search AND filter rather than search OR filter.
+    await userEvent.type(searchBox(), 'chana')
+
+    expect(cardTitles()).toEqual(['Chana Masala'])
+    // The rail selection itself is untouched by typing into search.
+    expect(screen.getByRole('checkbox', { name: 'Main, 3 recipes' })).toBeChecked()
+  })
+
+  it('tells a title-only miss that searching inside recipes is one click away, rather than looking like an empty library', async () => {
+    renderLibrary(library().all)
+
+    await userEvent.type(searchBox(), 'gochujang')
+
+    expect(screen.getByText(/no titles, publishers, or tags match/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Search inside recipes' })).toBeInTheDocument()
+  })
+
+  it('runs the server tier on demand, labels the results by tier, and leaves the filter rail and the search box alone', async () => {
+    const { all, chana } = library()
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ ids: [chana.id] }) })
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderLibrary(all)
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Main, 3 recipes' }))
+
+    const box = searchBox()
+    // Submitted with Enter, not a click on a separate button, because the
+    // thing under test is whether the search box itself survives the round
+    // trip — typing, hitting enter, and watching the results land without
+    // losing your place or your cursor.
+    await userEvent.type(box, 'gochujang{enter}')
+
+    await waitFor(() => expect(screen.getByText(/matched inside recipes/i)).toBeInTheDocument())
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/search?q=gochujang')
+    expect(cardTitles()).toEqual(['Chana Masala'])
+    // A search box that clears itself or loses focus mid-typing (or the
+    // instant results land) is the specific failure this test exists to
+    // catch.
+    expect(box).toHaveValue('gochujang')
+    expect(document.activeElement).toBe(box)
+    expect(screen.getByRole('checkbox', { name: 'Main, 3 recipes' })).toBeChecked()
+  })
+
+  it('distinguishes "nothing matched inside recipes" from "haven\'t searched yet"', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ ids: [] }) })
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderLibrary(library().all)
+    expect(screen.queryByText(/no matches inside recipes/i)).not.toBeInTheDocument()
+
+    // A query that hasn't been sent to the server yet must not be
+    // mistaken for a completed, empty server search.
+    await userEvent.type(searchBox(), 'gochujang')
+    expect(screen.queryByText(/no matches inside recipes/i)).not.toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Search inside recipes' }))
+    await waitFor(() => expect(screen.getByText(/no matches inside recipes/i)).toBeInTheDocument())
+  })
+
+  it('reverts to the local tier when the query changes after a server search, rather than showing a stale server answer', async () => {
+    const { all, chana, salmon } = library()
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ ids: [chana.id] }) })
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderLibrary(all)
+    const box = searchBox()
+    await userEvent.type(box, 'gochujang')
+    await userEvent.click(screen.getByRole('button', { name: 'Search inside recipes' }))
+    await waitFor(() => expect(cardTitles()).toEqual(['Chana Masala']))
+
+    await userEvent.clear(box)
+    await userEvent.type(box, 'salmon')
+
+    expect(screen.getByText(/matched titles, publishers, and tags/i)).toBeInTheDocument()
+    expect(cardTitles()).toEqual([salmon.title])
   })
 })
