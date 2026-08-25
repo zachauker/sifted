@@ -39,7 +39,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
       <header className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-black/10 px-3 py-2 text-sm dark:border-white/10">
         <nav className="flex items-center gap-4">
           <Link href="/" className="font-medium">
-            Library
+            Sifted
           </Link>
           <Link href="/add">Add</Link>
           <Link href="/settings">Settings</Link>

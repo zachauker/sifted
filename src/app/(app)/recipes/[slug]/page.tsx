@@ -39,7 +39,7 @@ export default async function RecipePage({ params }: { params: Promise<{ slug: s
 }
 
 /**
- * The browser tab, and what a shared link previews as. "Recipe Manager" on
+ * The browser tab, and what a shared link previews as. "Sifted" on
  * every tab is useless when three recipes are open at once mid-cook, and the
  * tab strip is all a phone shows.
  */

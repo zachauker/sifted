@@ -21,7 +21,7 @@ const geistMono = Geist_Mono({
 // without browser chrome does not need one — only genuine offline support
 // would.
 export const metadata: Metadata = {
-  title: "Recipe Manager",
+  title: "Sifted",
   description: "A recipe library for two.",
   manifest: "/manifest.json",
   icons: {
@@ -32,7 +32,7 @@ export const metadata: Metadata = {
   // covers the iOS versions that still need the older meta-tag form too —
   // this app is used from a phone, so both are cheap insurance.
   appleWebApp: {
-    title: "Recipes",
+    title: "Sifted",
   },
 };
 

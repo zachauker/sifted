@@ -1,36 +1,57 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Sifted
 
-## Getting Started
+A recipe library for two. It takes a URL, sifts the recipe out of the food-blog
+chaff, and stores the result: ingredients and steps at the top, the narrative
+kept but pushed to its own section at the bottom.
 
-First, run the development server:
+Built to replace a shared Notion database whose search had stopped being fast
+enough to use while standing in a kitchen.
+
+## What it does
+
+- **Import from a URL.** schema.org JSON-LD first, then microdata, then a model
+  call as the fallback. The original page is archived gzipped before anything is
+  parsed, so a bad extraction is always re-runnable without re-fetching.
+- **Filter while browsing.** Course, cuisine, tags, rating, and tried/not-tried,
+  with facet counts that stay honest as you narrow.
+- **Full-text search** over titles, ingredients, and notes (SQLite FTS5).
+- **Claimed vs actual time.** Recipes lie about how long they take; this records
+  both.
+- **Save from a phone.** An iOS Shortcut posts to the import API with a
+  per-device token — Share → Save to Sifted. See `docs/ios-shortcut.md`.
+
+## Running it locally
 
 ```bash
+cp .env.example .env.local   # fill in the values it lists
+npm install
+npm run db:migrate
+npm run seed                 # creates an account; there is no signup page
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Checks
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+npx vitest run && npx tsc --noEmit && npx eslint src tests scripts
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Docs
 
-## Learn More
+| File | What's in it |
+| --- | --- |
+| `docs/deployment.md` | Turso + Vercel, in the order that works |
+| `docs/ios-shortcut.md` | The two Shortcut variants, including the one for blocked publishers |
+| `docs/migration-notes.md` | Moving the Notion library across, and what doesn't survive |
+| `docs/superpowers/specs/` | The design decisions and why they went that way |
 
-To learn more about Next.js, take a look at the following resources:
+## Things that are deliberate
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- **No signup page.** Two accounts, created from the CLI. A third would be
+  surface area with no purpose.
+- **No service worker.** Offline is out of scope, and a half-built one causes
+  stale-cache bugs that are miserable to diagnose.
+- **`lib/extract` does no I/O.** All network access goes through `lib/fetch`,
+  which is the only place a URL is ever dereferenced.
+- **One sanitized HTML sink,** enforced by a test that scans the source for
+  `dangerouslySetInnerHTML` and fails on any second one.

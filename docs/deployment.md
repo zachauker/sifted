@@ -12,12 +12,12 @@ first deploy**, or the app boots against nothing.
 ```bash
 brew install tursodatabase/tap/turso
 turso auth login
-turso db create recipe-manager
-turso db show recipe-manager --url
-turso db tokens create recipe-manager
+turso db create sifted
+turso db show sifted --url
+turso db tokens create sifted
 ```
 
-Keep the URL (`libsql://recipe-manager-<org>.turso.io`) and the token.
+Keep the URL (`libsql://sifted-<org>.turso.io`) and the token.
 
 ## 2. Create a local env file
 
@@ -115,7 +115,7 @@ npm run token -- her@example.com "Her iPhone"
 stored. Have the phone in hand.
 
 Then follow `docs/ios-shortcut.md` on each phone: about a minute each. After
-that, saving a recipe is Share → Save to Recipes, exactly as it is in Notion
+that, saving a recipe is Share → Save to Sifted, exactly as it is in Notion
 today.
 
 ## 8. Migrate the 156 recipes

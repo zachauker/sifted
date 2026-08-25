@@ -2,7 +2,7 @@
 
 iOS Safari cannot register a web app as a share-sheet target, so this app uses a
 Shortcut instead. Setup takes about a minute per phone and only has to be done
-once. After that, saving a recipe is: **Share → Save to Recipes**.
+once. After that, saving a recipe is: **Share → Save to Sifted**.
 
 ## One-time setup, per phone
 
@@ -17,7 +17,7 @@ building the Shortcut.
 
 Then, on the phone:
 
-1. Open **Shortcuts** and create a new shortcut named **Save to Recipes**.
+1. Open **Shortcuts** and create a new shortcut named **Save to Sifted**.
 2. Open its settings (the ⓘ icon) and turn on **Show in Share Sheet**.
 3. Set **Accepted Types** to **URLs** only. This keeps it out of the share sheet
    for photos and text, where it would just be noise.
@@ -80,7 +80,7 @@ View Page Source, copy, paste into the retry form, but mobile Safari has no
 View Page Source at all, and this is a phone-first app. Build the second
 Shortcut variant above — **Get Contents of Web Page** feeding an `html` key
 alongside `url` in the same JSON body the first Shortcut sends — and use it
-in place of **Save to Recipes** for anything from a blocked publisher.
+in place of **Save to Sifted** for anything from a blocked publisher.
 Everything else about the setup (the token, the headers, the notification)
 is identical to the first Shortcut.
 
