@@ -15,7 +15,7 @@ import { auth, signOut } from '@/lib/auth'
  * library grid lands at `(app)/page.tsx`, this file should be deleted.
  *
  * Reaching this component at all already implies a session: the middleware
- * (`src/middleware.ts`) redirects any unauthenticated request for `/` to
+ * (`src/proxy.ts`) redirects any unauthenticated request for `/` to
  * `/login` before this ever renders.
  */
 export default async function Home() {

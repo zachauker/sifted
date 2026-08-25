@@ -4,7 +4,7 @@ import { LoginForm } from './login-form'
 
 export default async function LoginPage() {
   // Already signed in: middleware lets /login through unconditionally (see
-  // src/middleware.ts), so this is the one place that has to send a
+  // src/proxy.ts), so this is the one place that has to send a
   // signed-in visitor back out again rather than showing them a sign-in
   // form for an account they're already using.
   const session = await auth()
