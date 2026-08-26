@@ -1411,6 +1411,89 @@ async function loadRuntime() {
  * path are where every module in this repo actually meets, and until they were
  * reachable from a test the only coverage here was of the pure helpers above.
  */
+/**
+ * The two credentials the real run cannot survive without, checked once,
+ * before any row is touched.
+ *
+ * This exists because both of them have already failed here in exactly the
+ * way that is most expensive to discover late:
+ *
+ *   - A Blob store created with `--access private` rejects every write this
+ *     app makes, because hero images are served straight from their blob URL
+ *     and so must be public. The rejection arrives *inside* `runImport`,
+ *     which correctly converts it to a per-job `internal` failure — so the
+ *     run does not stop, it just fails all 156 rows one at a time, each with
+ *     a generic reason, over half an hour.
+ *
+ *   - An `ANTHROPIC_API_KEY` that is absent, truncated, or revoked does not
+ *     fail loudly at all. `applyEnrichment` swallows its own errors by design
+ *     (see the comment on `MODEL_INTERVAL_MS`), so every row still stores,
+ *     still reports success, and still ends up with zero tags and no parsed
+ *     quantities. The migration looks like it worked. The filter rail — the
+ *     entire reason this app exists — is quietly empty.
+ *
+ * One tiny write and one small model call is a few cents and about two
+ * seconds, against a failure mode measured in hours and re-runs.
+ *
+ * Only *authentication* failures from the model are fatal. A 429 here means
+ * the account is rate limited this second, which the throttle is built to
+ * ride out; aborting the whole migration over it would be wrong.
+ */
+export async function preflight(deps: {
+  store: BlobStore
+  llm: LlmClient
+  log: (message: string) => void
+}): Promise<void> {
+  const key = 'preflight/write-check.txt'
+  try {
+    await deps.store.put(key, new TextEncoder().encode('ok'), 'text/plain')
+    await deps.store.delete(key)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    if (/private access|private store/i.test(message)) {
+      throw new Error(
+        'The Blob store is configured for private access, but this app serves hero ' +
+          'images directly from their blob URL and needs a public store.\n' +
+          '  A store\'s access mode is fixed when it is created, so make a new one:\n' +
+          '    vercel blob create-store sifted --access public\n' +
+          '  then replace BLOB_READ_WRITE_TOKEN in .env.local with the new store\'s token.\n' +
+          `  (underlying error: ${message})`,
+      )
+    }
+    throw new Error(
+      `Blob storage is not usable, so no recipe could be archived or given an image.\n` +
+        `  Check BLOB_READ_WRITE_TOKEN in .env.local.\n` +
+        `  (underlying error: ${message})`,
+    )
+  }
+  deps.log('preflight: blob storage OK')
+
+  try {
+    await deps.llm.enrich({
+      title: 'Preflight Check',
+      ingredientLines: ['1 cup water'],
+      rawTags: [],
+    })
+    deps.log('preflight: model OK')
+  } catch (error) {
+    const status = (error as { status?: number } | null)?.status
+    if (status === 401 || status === 403) {
+      throw new Error(
+        'The Anthropic API key was rejected. Every recipe would still import and ' +
+          'still report success, but with no tags and no parsed quantities — so this ' +
+          'stops now rather than silently migrating an unfilterable library.\n' +
+          '  Set a full ANTHROPIC_API_KEY in .env.local (a real key is ~100 characters; ' +
+          'a truncated paste is the usual cause).\n' +
+          `  (underlying error: ${errorText(error)})`,
+      )
+    }
+    deps.log(
+      `preflight: model call failed but not on authentication (${errorText(error)}) — ` +
+        'continuing, since the throttle is built to ride out a rate limit',
+    )
+  }
+}
+
 export type Runtime = Awaited<ReturnType<typeof loadRuntime>>
 
 /**
@@ -1945,6 +2028,8 @@ async function runMigration(
 
   const rt = await loadRuntime()
   const llm = createThrottledLlm(rt.anthropic, opts.modelIntervalMs)
+
+  await preflight({ store: rt.store, llm: rt.anthropic, log })
   const notionGate = createSerialGate(NOTION_INTERVAL_MS)
 
   const pending = rows.filter((row) => !isTerminal(resume.rows[row.pageId]))

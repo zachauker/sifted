@@ -32,7 +32,7 @@ Fill in:
 | `TURSO_DATABASE_URL` | step 1 |
 | `TURSO_AUTH_TOKEN` | step 1 |
 | `AUTH_SECRET` | `openssl rand -base64 32` |
-| `ANTHROPIC_API_KEY` | console.anthropic.com |
+| `ANTHROPIC_API_KEY` | console.anthropic.com — **paste the whole thing**, it is ~100 characters |
 | `BLOB_READ_WRITE_TOKEN` | step 4 — leave blank for now |
 
 `.env.local` is gitignored. Every `npm run` script here loads it automatically.
@@ -54,8 +54,24 @@ point, and proof the connection works.
 
 ## 4. Blob storage
 
-In the Vercel dashboard: **Storage → Create → Blob**, name it, then copy the
-`BLOB_READ_WRITE_TOKEN` it generates into `.env.local`.
+**The store must be created with public access.** Hero images are served
+straight from their blob URL by `next/image`, and `next.config.ts` allowlists
+`**.public.blob.vercel-storage.com`. A private store rejects every write this
+app makes, and its URLs are on a different host that would not render even if
+it accepted them. Access mode is fixed when the store is created, so getting
+this wrong means making a new one.
+
+```bash
+vercel blob create-store sifted --access public
+```
+
+Or in the dashboard: **Storage → Create → Blob**, and choose **public** access.
+Either way, copy the `BLOB_READ_WRITE_TOKEN` it generates into `.env.local`.
+
+The archived original HTML lives in the same store, so it is public too. The
+keys are derived from unguessable recipe ids, and the contents are pages that
+were already published on the open web — but it is worth knowing rather than
+assuming otherwise.
 
 This holds hero images, their thumbnails, and a gzipped copy of every recipe's
 original HTML. Budget roughly 150 MB for a 156-recipe library.
@@ -147,6 +163,11 @@ npm run migrate          # the real run; resumable, ~20-40 min
 npm run migrate:verify   # reconcile against the source
 npm run unenriched       # recipes that stored without tags or quantities
 ```
+
+The real run makes one small blob write and one small model call before it
+touches a row, and refuses to start if either credential is wrong. Both of
+those have gone wrong here before, and both are far cheaper to catch in two
+seconds than halfway through 156 recipes.
 
 `migrate:verify` reconciles against the numbers measured from your Notion
 database: 156 recipes, 74 rated, 76 Made It, 69 Want to Make, dates spanning

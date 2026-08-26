@@ -13,6 +13,7 @@ import {
   narrativeParagraphs,
   parseArgs,
   parseResumeFile,
+  preflight,
   printSummary,
   processRow,
   renderReport,
@@ -1266,5 +1267,70 @@ describe('processRow — the hero image is captured before anything throttled', 
       .where(eq(schema.images.recipeId, recipeId))
     expect(image.blobKey).toBe(`recipes/${recipeId}/hero.webp`)
     expect(image.role).toBe('source_hero')
+  })
+})
+
+describe('preflight', () => {
+  const okStore = () => ({
+    put: vi.fn(async (key: string) => ({ key, url: 'u', size: 2 })),
+    get: vi.fn(),
+    delete: vi.fn(async () => {}),
+  })
+  const okLlm = () => ({
+    enrich: vi.fn(async () => ({ tags: [], ingredients: [] })),
+    extractRecipe: vi.fn(),
+  })
+
+  it('writes and then removes its probe blob rather than leaving litter', async () => {
+    const store = okStore()
+    await preflight({ store: store as never, llm: okLlm() as never, log: () => {} })
+    expect(store.put).toHaveBeenCalledOnce()
+    expect(store.delete).toHaveBeenCalledWith(store.put.mock.calls[0][0])
+  })
+
+  it('names the private-store misconfiguration and the command that fixes it', async () => {
+    const store = okStore()
+    store.put = vi.fn(async () => {
+      throw new Error('Vercel Blob: Cannot use public access on a private store. The store is configured with private access.')
+    })
+
+    await expect(
+      preflight({ store: store as never, llm: okLlm() as never, log: () => {} }),
+    ).rejects.toThrow(/create-store [\s\S]* --access public/)
+  })
+
+  it('refuses to start when the model key is rejected, because that failure is silent', async () => {
+    const llm = okLlm()
+    llm.enrich = vi.fn(async () => {
+      throw Object.assign(new Error('401 authentication_error'), { status: 401 })
+    })
+
+    await expect(
+      preflight({ store: okStore() as never, llm: llm as never, log: () => {} }),
+    ).rejects.toThrow(/ANTHROPIC_API_KEY/)
+  })
+
+  it('rides out a rate limit instead of aborting the whole migration', async () => {
+    const llm = okLlm()
+    llm.enrich = vi.fn(async () => {
+      throw Object.assign(new Error('429 rate_limit_error'), { status: 429 })
+    })
+    const lines: string[] = []
+
+    await expect(
+      preflight({ store: okStore() as never, llm: llm as never, log: (m) => lines.push(m) }),
+    ).resolves.toBeUndefined()
+    expect(lines.join('\n')).toMatch(/not on authentication/)
+  })
+
+  it('fails on an unusable blob store even when the message is not the private-store one', async () => {
+    const store = okStore()
+    store.put = vi.fn(async () => {
+      throw new Error('Access denied, please provide a valid token')
+    })
+
+    await expect(
+      preflight({ store: store as never, llm: okLlm() as never, log: () => {} }),
+    ).rejects.toThrow(/BLOB_READ_WRITE_TOKEN/)
   })
 })
