@@ -1,9 +1,10 @@
-import { and, eq, sql } from 'drizzle-orm'
+import { and, eq, ne, sql } from 'drizzle-orm'
 import { createId } from '@paralleldrive/cuid2'
 import type { Db } from '@/lib/db'
 import { recipes, ingredients, steps, recipeTags } from '@/lib/db/schema'
 import type { ExtractedRecipe } from '@/lib/extract/types'
 import type { TagAssignment } from '@/lib/taxonomy'
+import type { SectionedLine } from '@/lib/recipe-text'
 
 /**
  * The single write path for a recipe.
@@ -443,6 +444,186 @@ export async function updateUserFields(
       .get()
 
     return after ?? null
+  })
+}
+
+/**
+ * A recipe's own words, as a person typed them.
+ *
+ * `ingredients` and `steps` are the complete replacement lists, already parsed
+ * out of the editor's textareas by `@/lib/recipe-text` — this function does no
+ * text parsing of its own. `tags` is likewise the complete intended set.
+ */
+export type RecipeContentInput = {
+  title: string
+  description: string | null
+  publisher: string | null
+  author: string | null
+  sourceUrl: string | null
+  sourceDomain: string | null
+  claimedTimeMinutes: number | null
+  servings: number | null
+  yieldText: string | null
+  ingredients: readonly SectionedLine[]
+  steps: readonly SectionedLine[]
+  tags: readonly TagAssignment[]
+}
+
+export type UpdateContentResult =
+  | { ok: true }
+  | { ok: false; reason: 'not_found' | 'source_url_taken' }
+
+/**
+ * The second recipe write path: a hand-edit, as opposed to `upsertRecipe`'s
+ * machine extraction.
+ *
+ * Deliberately not an edit mode on `upsertRecipe`. That function takes an
+ * `ExtractedRecipe` and is keyed on source-URL dedupe, and its `sourceFields`
+ * comment — "everything here is by definition a better read of the same
+ * source" — stops being true the moment a human types into it. What the two
+ * genuinely share is the search index, and that is shared as code
+ * (`syncFtsRow`), not by pretending an edit is an extraction.
+ *
+ * Never writes `rating`, `status`, `notes` or `actualTimeMinutes` (the four
+ * columns nothing can regenerate), nor `slug`, `createdAt`, `archivedHtmlKey`,
+ * `sourceEncoding`, `extractionMethod` or `enrichmentApplied`. Retitling in
+ * particular must not move the slug: it is a URL that may already be
+ * bookmarked, and in a two-person app has very likely been texted to the other
+ * person.
+ *
+ * Returns a result rather than throwing for the two failures a person can
+ * cause — a recipe deleted in another tab, and a source URL another recipe
+ * already owns — because both are messages the form has to render beside a
+ * field, not stack traces.
+ */
+export async function updateRecipeContent(
+  db: Db,
+  recipeId: string,
+  input: RecipeContentInput,
+): Promise<UpdateContentResult> {
+  return db.transaction(async (tx): Promise<UpdateContentResult> => {
+    const existing = await tx
+      .select({
+        id: recipes.id,
+        notes: recipes.notes,
+        narrativeHtml: recipes.narrativeHtml,
+      })
+      .from(recipes)
+      .where(eq(recipes.id, recipeId))
+      .get()
+    if (!existing) return { ok: false, reason: 'not_found' }
+
+    // Checked rather than left to the UNIQUE constraint, so the caller gets a
+    // message that names the problem instead of a driver error. The constraint
+    // stays as the backstop for the race between this read and the write.
+    if (input.sourceUrl !== null) {
+      const clash = await tx
+        .select({ id: recipes.id })
+        .from(recipes)
+        .where(and(eq(recipes.sourceUrl, input.sourceUrl), ne(recipes.id, recipeId)))
+        .get()
+      if (clash) return { ok: false, reason: 'source_url_taken' }
+    }
+
+    // Read before the delete below: these are the parsed columns being carried
+    // across. First occurrence wins, so two identical lines cannot swap
+    // parses.
+    const previous = await tx
+      .select({
+        rawText: ingredients.rawText,
+        quantity: ingredients.quantity,
+        unit: ingredients.unit,
+        item: ingredients.item,
+        note: ingredients.note,
+      })
+      .from(ingredients)
+      .where(eq(ingredients.recipeId, recipeId))
+      .all()
+
+    const parsedByText = new Map<string, (typeof previous)[number]>()
+    for (const line of previous) {
+      if (!parsedByText.has(line.rawText)) parsedByText.set(line.rawText, line)
+    }
+
+    await tx
+      .update(recipes)
+      .set({
+        title: input.title,
+        description: input.description,
+        publisher: input.publisher,
+        author: input.author,
+        sourceUrl: input.sourceUrl,
+        sourceDomain: input.sourceDomain,
+        claimedTimeMinutes: input.claimedTimeMinutes,
+        servings: input.servings,
+        yieldText: input.yieldText,
+        handEdited: true,
+        updatedAt: new Date(),
+      })
+      .where(eq(recipes.id, recipeId))
+
+    await tx.delete(ingredients).where(eq(ingredients.recipeId, recipeId))
+    await tx.delete(steps).where(eq(steps.recipeId, recipeId))
+
+    // Every tag, not just the extracted ones — unlike `upsertRecipe`, which
+    // deletes only what it wrote. The editor displays the recipe's whole tag
+    // set and submits the whole intended set, so what comes back *is* the
+    // answer, and the rows are rewritten as `user` to put them at the top of
+    // the extracted < notion < user ladder.
+    await tx.delete(recipeTags).where(eq(recipeTags.recipeId, recipeId))
+
+    // Carried by text, never by position. `enrichStoredRecipe` keys parsed
+    // columns on (recipe_id, position), so a line inserted anywhere above
+    // would otherwise reattach every quantity to the wrong ingredient —
+    // silently, with the page still rendering perfectly. A changed line gets
+    // nulls: the old parse no longer describes the new text.
+    const ingredientRows = input.ingredients.map((line, position) => {
+      const carried = parsedByText.get(line.text)
+      return {
+        recipeId,
+        position,
+        section: line.section,
+        rawText: line.text,
+        quantity: carried?.quantity ?? null,
+        unit: carried?.unit ?? null,
+        item: carried?.item ?? null,
+        note: carried?.note ?? null,
+      }
+    })
+    if (ingredientRows.length > 0) await tx.insert(ingredients).values(ingredientRows)
+
+    const stepRows = input.steps.map((line, position) => ({
+      recipeId,
+      position,
+      section: line.section,
+      text: line.text,
+    }))
+    if (stepRows.length > 0) await tx.insert(steps).values(stepRows)
+
+    if (input.tags.length > 0) {
+      await tx.insert(recipeTags).values(
+        input.tags.map((tag) => ({
+          recipeId,
+          facet: tag.facet,
+          value: tag.value,
+          source: 'user' as const,
+        })),
+      )
+    }
+
+    // `notes` carried from the stored row and `narrative` recomputed from the
+    // *new* description plus the untouched narrative HTML. Dropping either
+    // would leave text that is still stored and still displayed but no longer
+    // findable.
+    await syncFtsRow(tx, recipeId, {
+      title: input.title,
+      ingredients: ingredientLinesText(ingredientRows),
+      steps: stepLinesText(stepRows),
+      notes: existing.notes ?? '',
+      narrative: narrativeIndexText(input.description, existing.narrativeHtml),
+    })
+
+    return { ok: true }
   })
 }
 
