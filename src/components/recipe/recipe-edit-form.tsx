@@ -58,11 +58,22 @@ export function initialEditValues(recipe: RecipeDetail): EditFormValues {
 }
 
 const inputClass =
-  'w-full rounded-md border border-black/15 bg-white px-3 py-2 text-base sm:text-sm dark:border-white/20 dark:bg-neutral-900'
+  'w-full min-h-11 rounded-md border border-black/15 bg-white px-3 py-2 text-base sm:text-sm dark:border-white/20 dark:bg-neutral-900'
 
-function FieldError({ message }: { message: string | undefined }) {
+/**
+ * `id` is the field name — `aria-describedby` on the input it belongs to
+ * points here, so a screen reader announces the reason a save was rejected
+ * instead of leaving a silently-invalid box behind. Without this, the only
+ * announced problem is the whole-form `role="alert"` banner, which is empty
+ * for a field-only rejection.
+ */
+function FieldError({ id, message }: { id: string; message: string | undefined }) {
   if (!message) return null
-  return <p className="mt-1 text-sm text-red-700 dark:text-red-300">{message}</p>
+  return (
+    <p id={id} className="mt-1 text-sm text-red-700 dark:text-red-300">
+      {message}
+    </p>
+  )
 }
 
 export function RecipeEditForm({
@@ -118,33 +129,74 @@ export function RecipeEditForm({
 
       <div>
         <label htmlFor="title" className="mb-1 block text-sm font-medium">Title</label>
-        <input id="title" name="title" type="text" defaultValue={values.title} className={inputClass} />
-        <FieldError message={errors.title} />
+        <input
+          id="title"
+          name="title"
+          type="text"
+          defaultValue={values.title}
+          className={inputClass}
+          aria-describedby={errors.title ? 'title-error' : undefined}
+          aria-invalid={errors.title ? true : undefined}
+        />
+        <FieldError id="title-error" message={errors.title} />
       </div>
 
       <div>
         <label htmlFor="description" className="mb-1 block text-sm font-medium">Description</label>
-        <textarea id="description" name="description" rows={2} defaultValue={values.description} className={inputClass} />
-        <FieldError message={errors.description} />
+        <textarea
+          id="description"
+          name="description"
+          rows={2}
+          defaultValue={values.description}
+          className={inputClass}
+          aria-describedby={errors.description ? 'description-error' : undefined}
+          aria-invalid={errors.description ? true : undefined}
+        />
+        <FieldError id="description-error" message={errors.description} />
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2">
         <div>
           <label htmlFor="publisher" className="mb-1 block text-sm font-medium">Publisher</label>
-          <input id="publisher" name="publisher" type="text" defaultValue={values.publisher} className={inputClass} />
-          <FieldError message={errors.publisher} />
+          <input
+            id="publisher"
+            name="publisher"
+            type="text"
+            defaultValue={values.publisher}
+            className={inputClass}
+            aria-describedby={errors.publisher ? 'publisher-error' : undefined}
+            aria-invalid={errors.publisher ? true : undefined}
+          />
+          <FieldError id="publisher-error" message={errors.publisher} />
         </div>
         <div>
           <label htmlFor="author" className="mb-1 block text-sm font-medium">Author</label>
-          <input id="author" name="author" type="text" defaultValue={values.author} className={inputClass} />
-          <FieldError message={errors.author} />
+          <input
+            id="author"
+            name="author"
+            type="text"
+            defaultValue={values.author}
+            className={inputClass}
+            aria-describedby={errors.author ? 'author-error' : undefined}
+            aria-invalid={errors.author ? true : undefined}
+          />
+          <FieldError id="author-error" message={errors.author} />
         </div>
       </div>
 
       <div>
         <label htmlFor="sourceUrl" className="mb-1 block text-sm font-medium">Source URL</label>
-        <input id="sourceUrl" name="sourceUrl" type="text" inputMode="url" defaultValue={values.sourceUrl} className={inputClass} />
-        <FieldError message={errors.sourceUrl} />
+        <input
+          id="sourceUrl"
+          name="sourceUrl"
+          type="text"
+          inputMode="url"
+          defaultValue={values.sourceUrl}
+          className={inputClass}
+          aria-describedby={errors.sourceUrl ? 'sourceUrl-error' : undefined}
+          aria-invalid={errors.sourceUrl ? true : undefined}
+        />
+        <FieldError id="sourceUrl-error" message={errors.sourceUrl} />
       </div>
 
       <div className="grid gap-4 sm:grid-cols-3">
@@ -159,18 +211,37 @@ export function RecipeEditForm({
             inputMode="numeric"
             defaultValue={values.claimedTimeMinutes}
             className={inputClass}
+            aria-describedby={errors.claimedTimeMinutes ? 'claimedTimeMinutes-error' : undefined}
+            aria-invalid={errors.claimedTimeMinutes ? true : undefined}
           />
-          <FieldError message={errors.claimedTimeMinutes} />
+          <FieldError id="claimedTimeMinutes-error" message={errors.claimedTimeMinutes} />
         </div>
         <div>
           <label htmlFor="servings" className="mb-1 block text-sm font-medium">Servings</label>
-          <input id="servings" name="servings" type="text" inputMode="numeric" defaultValue={values.servings} className={inputClass} />
-          <FieldError message={errors.servings} />
+          <input
+            id="servings"
+            name="servings"
+            type="text"
+            inputMode="numeric"
+            defaultValue={values.servings}
+            className={inputClass}
+            aria-describedby={errors.servings ? 'servings-error' : undefined}
+            aria-invalid={errors.servings ? true : undefined}
+          />
+          <FieldError id="servings-error" message={errors.servings} />
         </div>
         <div>
           <label htmlFor="yieldText" className="mb-1 block text-sm font-medium">Yield</label>
-          <input id="yieldText" name="yieldText" type="text" defaultValue={values.yieldText} className={inputClass} />
-          <FieldError message={errors.yieldText} />
+          <input
+            id="yieldText"
+            name="yieldText"
+            type="text"
+            defaultValue={values.yieldText}
+            className={inputClass}
+            aria-describedby={errors.yieldText ? 'yieldText-error' : undefined}
+            aria-invalid={errors.yieldText ? true : undefined}
+          />
+          <FieldError id="yieldText-error" message={errors.yieldText} />
         </div>
       </div>
 
@@ -180,8 +251,16 @@ export function RecipeEditForm({
           One per line, saved exactly as typed. A line ending in a colon — “For the sauce:” —
           becomes a heading for the lines under it.
         </p>
-        <textarea id="ingredients" name="ingredients" rows={12} defaultValue={values.ingredients} className={`${inputClass} font-mono`} />
-        <FieldError message={errors.ingredients} />
+        <textarea
+          id="ingredients"
+          name="ingredients"
+          rows={12}
+          defaultValue={values.ingredients}
+          className={`${inputClass} font-mono`}
+          aria-describedby={errors.ingredients ? 'ingredients-error' : undefined}
+          aria-invalid={errors.ingredients ? true : undefined}
+        />
+        <FieldError id="ingredients-error" message={errors.ingredients} />
       </div>
 
       <div>
@@ -189,14 +268,25 @@ export function RecipeEditForm({
         <p className="mb-1 text-xs text-neutral-500 dark:text-neutral-400">
           One per line. Headings work here too.
         </p>
-        <textarea id="steps" name="steps" rows={12} defaultValue={values.steps} className={inputClass} />
-        <FieldError message={errors.steps} />
+        <textarea
+          id="steps"
+          name="steps"
+          rows={12}
+          defaultValue={values.steps}
+          className={inputClass}
+          aria-describedby={errors.steps ? 'steps-error' : undefined}
+          aria-invalid={errors.steps ? true : undefined}
+        />
+        <FieldError id="steps-error" message={errors.steps} />
       </div>
 
       <div className="flex flex-col gap-4">
         <h2 className="text-sm font-medium">Tags</h2>
         {VOCABULARY_FACETS.map((facet) => (
-          <fieldset key={facet}>
+          <fieldset
+            key={facet}
+            aria-describedby={errors.vocabularyTags ? 'vocabularyTags-error' : undefined}
+          >
             <legend className="mb-1 text-xs font-semibold tracking-wider text-neutral-500 uppercase dark:text-neutral-400">
               {FACET_LABELS[facet]}
             </legend>
@@ -216,15 +306,23 @@ export function RecipeEditForm({
             </div>
           </fieldset>
         ))}
-        <FieldError message={errors.vocabularyTags} />
+        <FieldError id="vocabularyTags-error" message={errors.vocabularyTags} />
 
         <div>
           <label htmlFor="freeTags" className="mb-1 block text-sm font-medium">Other tags</label>
           <p className="mb-1 text-xs text-neutral-500 dark:text-neutral-400">
             Comma-separated. Anything the library already recognizes is filed under its own facet.
           </p>
-          <input id="freeTags" name="freeTags" type="text" defaultValue={values.freeTags} className={inputClass} />
-          <FieldError message={errors.freeTags} />
+          <input
+            id="freeTags"
+            name="freeTags"
+            type="text"
+            defaultValue={values.freeTags}
+            className={inputClass}
+            aria-describedby={errors.freeTags ? 'freeTags-error' : undefined}
+            aria-invalid={errors.freeTags ? true : undefined}
+          />
+          <FieldError id="freeTags-error" message={errors.freeTags} />
         </div>
       </div>
 

@@ -1,9 +1,18 @@
+import { cache } from 'react'
 import { notFound } from 'next/navigation'
 import type { Metadata } from 'next'
 import { db } from '@/lib/db'
 import { getRecipeBySlug } from '@/lib/db/queries/recipe-detail'
 import { RecipeEditForm } from '@/components/recipe/recipe-edit-form'
 import { saveRecipeEdits } from './actions'
+
+/**
+ * Both `generateMetadata` and the page itself need the recipe, and Next calls
+ * them separately for the same request. `cache` collapses that back into one
+ * fetch per request — see the identical comment on the sibling recipe page's
+ * `loadRecipe`, which this mirrors.
+ */
+const loadRecipe = cache((slug: string) => getRecipeBySlug(db, slug))
 
 /**
  * `/recipes/<slug>/edit` — fixing what a recipe says.
@@ -14,7 +23,7 @@ import { saveRecipeEdits } from './actions'
  */
 export default async function EditRecipePage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params
-  const recipe = await getRecipeBySlug(db, slug)
+  const recipe = await loadRecipe(slug)
 
   if (!recipe) notFound()
 
@@ -39,6 +48,6 @@ export async function generateMetadata({
   params: Promise<{ slug: string }>
 }): Promise<Metadata> {
   const { slug } = await params
-  const recipe = await getRecipeBySlug(db, slug)
+  const recipe = await loadRecipe(slug)
   return { title: recipe ? `Edit ${recipe.title}` : 'Recipe not found' }
 }

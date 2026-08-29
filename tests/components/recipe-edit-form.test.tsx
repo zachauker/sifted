@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import '@testing-library/jest-dom/vitest'
 import type { RecipeDetail } from '@/lib/db/queries/recipe-detail'
 import { RecipeEditForm, initialEditValues } from '@/components/recipe/recipe-edit-form'
@@ -147,5 +148,35 @@ describe('RecipeEditForm, after a rejected save', () => {
     render(<RecipeEditForm recipe={recipe()} action={noop} initialState={rejected} />)
 
     expect(screen.getByRole('alert')).toHaveTextContent('no longer in the library')
+  })
+
+  // The two tests above seed `initialState` directly, so `useActionState`
+  // returns the rejected state on the very first render and the actual
+  // mechanism this component exists for — the action resolving, React
+  // resetting the uncontrolled form, and the new `defaultValue`s landing in
+  // the boxes — never runs. This test drives a real submit instead, so that
+  // mechanism is the thing under test.
+  it('really submits, and the rejected state lands in the boxes after the action resolves', async () => {
+    const rejected: EditFormState = {
+      message: '',
+      fieldErrors: { title: 'A title is required.' },
+      values: { ...initialEditValues(recipe()), title: '', steps: 'Do not lose me.' },
+    }
+    const action = vi.fn(async () => rejected)
+    const user = userEvent.setup()
+
+    render(<RecipeEditForm recipe={recipe()} action={action} />)
+
+    // Starts from the stored recipe, not from the rejected values — confirms
+    // this render did not just happen to already show the rejected text.
+    expect(screen.getByLabelText(/^steps$/i)).toHaveValue('Roast low for three hours.')
+
+    await user.click(screen.getByRole('button', { name: /save recipe/i }))
+
+    expect(action).toHaveBeenCalledTimes(1)
+    await waitFor(() => {
+      expect(screen.getByLabelText(/^steps$/i)).toHaveValue('Do not lose me.')
+    })
+    expect(screen.getByText('A title is required.')).toBeInTheDocument()
   })
 })
