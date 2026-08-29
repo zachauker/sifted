@@ -148,8 +148,10 @@ export const images = sqliteTable('images', {
   // provider, such as Cloudflare R2, without a data migration.
   //
   // Nullable: a database migrated before this column existed has rows with
-  // keys but no stored URL, and there is no way to recover one after the
-  // fact.
+  // keys but no stored URL. That is recoverable, contrary to what this comment
+  // used to claim — `head(pathname)` asks the provider for its own URL, which
+  // is the same answer `put` returned originally. `npm run images --
+  // --repair-urls` backfills them without downloading anything.
   blobUrl: text('blob_url'),
   thumbUrl: text('thumb_url'),
   width: integer('width').notNull(),

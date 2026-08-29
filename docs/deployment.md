@@ -232,4 +232,6 @@ Vercel and does not off it. Without it every request bounces to `/login`.
 | The filter rail is empty | The migration ran without enrichment. `npm run unenriched` |
 | Imports and retries return 500 | Check `/api/health`. If `requireModule` is false, the runtime cannot load jsdom — import from your machine with `npm run import` until that is fixed |
 | A recipe has no tags and its page cannot be fetched | `npm run import -- --enrich-only` — re-runs enrichment against what is already stored, no network needed |
+| Recipe cards show no image, but the import said it worked | `npm run images -- --repair-urls` — the blob is there, only its URL was lost |
+| A recipe genuinely has no picture | `npm run images -- --missing` reads it back out of the archived page; `--recipe=<slug> --from=<url>` attaches one by hand |
 | Every import or retry returns 500, with `ERR_REQUIRE_ESM` / `Failed to load external module jsdom` in the runtime logs | The function is running Node older than 22.12. `engines.node` in `package.json` pins this to `24.x` — redeploy so the setting takes effect |
