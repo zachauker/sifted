@@ -49,6 +49,12 @@ export async function GET() {
       // False means `require()` of an ES module throws, which is fatal to
       // jsdom and therefore to every import.
       requireModule: process.features.require_module ?? null,
+      // How it got that way, which decides what can fix it. A flag on the
+      // command line beats NODE_OPTIONS, so if `--no-experimental-require-module`
+      // shows up in execArgv there is no environment variable that can undo
+      // it; if it shows up only in nodeOptions, setting NODE_OPTIONS can.
+      execArgv: process.execArgv,
+      nodeOptions: process.env.NODE_OPTIONS ?? null,
       extraction: jsdom,
     },
     { status: healthy ? 200 : 503 },
