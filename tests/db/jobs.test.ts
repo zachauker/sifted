@@ -207,3 +207,75 @@ describe('findInFlightJob', () => {
     expect(await findInFlightJob(db, 'https://example.com/failed')).toBeUndefined()
   })
 })
+
+/**
+ * The tray answers "what still needs a human", not "what has ever failed".
+ *
+ * On the real library this was 74 of 86 rows: failures that a later run had
+ * already recovered from, burying the six URLs that genuinely needed doing.
+ */
+describe('needs-attention excludes failures that were later recovered', () => {
+  async function storeRecipe(sourceUrl: string) {
+    const { upsertRecipe } = await import('@/lib/db/queries/recipes')
+    return upsertRecipe(db, {
+      extracted: {
+        title: 'Recovered', description: null, author: null, publisher: null,
+        claimedTimeMinutes: null, servings: null, yieldText: null,
+        ingredients: [], steps: [], tags: [],
+        heroImageUrl: null, narrativeHtml: null, extractionMethod: 'jsonld',
+      },
+      sourceUrl,
+      sourceDomain: 'example.com',
+      enrichmentApplied: true,
+    })
+  }
+
+  it('hides a failed job whose URL now has a recipe', async () => {
+    const { countJobsNeedingAttention } = await import('@/lib/db/queries/jobs')
+    const url = 'https://example.com/recovered'
+    const id = await createJob(db, url)
+    await markFailed(db, id, 'blocked', new Error('403'))
+
+    expect(await countJobsNeedingAttention(db)).toBe(1)
+
+    await storeRecipe(url)
+
+    expect(await countJobsNeedingAttention(db)).toBe(0)
+    expect(await listJobsNeedingAttention(db)).toHaveLength(0)
+  })
+
+  it('keeps a failed job whose URL has no recipe', async () => {
+    const { countJobsNeedingAttention } = await import('@/lib/db/queries/jobs')
+    const id = await createJob(db, 'https://example.com/still-missing')
+    await markFailed(db, id, 'blocked', new Error('403'))
+    await storeRecipe('https://example.com/something-else')
+
+    expect(await countJobsNeedingAttention(db)).toBe(1)
+    expect(await listJobsNeedingAttention(db)).toHaveLength(1)
+  })
+
+  it('hides every stale attempt at the same URL, not just the newest', async () => {
+    const { countJobsNeedingAttention } = await import('@/lib/db/queries/jobs')
+    const url = 'https://example.com/retried-a-lot'
+    for (let i = 0; i < 5; i++) {
+      const id = await createJob(db, url)
+      await markFailed(db, id, 'blocked', new Error('403'))
+    }
+    expect(await countJobsNeedingAttention(db)).toBe(5)
+
+    await storeRecipe(url)
+    expect(await countJobsNeedingAttention(db)).toBe(0)
+  })
+
+  it('the badge and the tray still agree', async () => {
+    const { countJobsNeedingAttention } = await import('@/lib/db/queries/jobs')
+    const failedWithRecipe = await createJob(db, 'https://example.com/a')
+    await markFailed(db, failedWithRecipe, 'blocked', new Error('403'))
+    await storeRecipe('https://example.com/a')
+
+    const stillBroken = await createJob(db, 'https://example.com/b')
+    await markFailed(db, stillBroken, 'no_recipe', new Error('nothing there'))
+
+    expect(await countJobsNeedingAttention(db)).toBe((await listJobsNeedingAttention(db)).length)
+  })
+})

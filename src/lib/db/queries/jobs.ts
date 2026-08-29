@@ -1,7 +1,7 @@
 import { STALE_RUNNING_MS } from '@/lib/jobs/staleness'
 import { and, desc, eq, gt, inArray, or, sql } from 'drizzle-orm'
 import type { Db } from '@/lib/db'
-import { importJobs } from '@/lib/db/schema'
+import { importJobs, recipes } from '@/lib/db/schema'
 
 /**
  * The import job row is the only thing the user can see while a background
@@ -173,11 +173,32 @@ export async function getJob(db: Db, jobId: string) {
  * Same ordering as `listJobs`, for the same reason: `created_at` only holds
  * seconds, so a burst ties, and `rowid` is what breaks the tie correctly.
  */
+/**
+ * A job in an attention state whose URL already has a recipe is not something
+ * anyone can act on: the import it records failed, and a later one succeeded.
+ *
+ * Without this the tray counts *attempts* rather than *problems*, and every
+ * recovered failure nags forever. Measured on the real library that was 74 of
+ * 86 rows — so the one number the tray exists to communicate was wrong by a
+ * factor of seven, and the six URLs that genuinely needed a human were buried
+ * under rows that did not.
+ *
+ * Matched on the URL as recorded rather than a canonical form, because that is
+ * what the two tables actually share: `runImport` writes the canonical URL to
+ * `recipes.source_url`, and a job whose canonical form differs from what was
+ * shared is precisely a job whose stored recipe cannot be found by this
+ * comparison. Those stay in the tray, which is the safe direction to be wrong
+ * in — a recipe you already have shown once too often, rather than a genuine
+ * failure hidden.
+ */
 export async function listJobsNeedingAttention(db: Db, limit?: number) {
   const base = db
     .select()
     .from(importJobs)
-    .where(inArray(importJobs.status, ['failed', 'running', 'queued']))
+    .where(and(
+      inArray(importJobs.status, ['failed', 'running', 'queued']),
+      sql`not exists (select 1 from ${recipes} where ${recipes.sourceUrl} = ${importJobs.url})`,
+    ))
     .orderBy(desc(importJobs.createdAt), sql`${importJobs}.rowid desc`)
   return limit === undefined ? base : base.limit(limit)
 }
@@ -207,7 +228,10 @@ export async function countJobsNeedingAttention(db: Db): Promise<number> {
   const [row] = await db
     .select({ count: sql<number>`count(*)` })
     .from(importJobs)
-    .where(inArray(importJobs.status, ['failed', 'running', 'queued']))
+    .where(and(
+      inArray(importJobs.status, ['failed', 'running', 'queued']),
+      sql`not exists (select 1 from ${recipes} where ${recipes.sourceUrl} = ${importJobs.url})`,
+    ))
   return row?.count ?? 0
 }
 
