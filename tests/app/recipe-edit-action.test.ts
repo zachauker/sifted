@@ -168,6 +168,30 @@ describe('saveRecipeEdits', () => {
     // This is the backstop for that lost race, not a substitute for the
     // pre-check — the pre-check is what gives an unhurried user the message
     // without ever touching the database.
+    //
+    // Shaped the way it actually arrives, not the way it originates: Drizzle
+    // wraps the driver's error in a `DrizzleQueryError` whose own `.message`
+    // is the SQL text, and puts the real `LibsqlError` — carrying
+    // `extendedCode` and the SQLite engine's own message — on `.cause`.
+    mocks.updateRecipeContent.mockRejectedValue(
+      Object.assign(new Error('Failed query: update "recipes" set "source_url" = ?\nparams: ...'), {
+        cause: Object.assign(new Error('SQLITE_CONSTRAINT: UNIQUE constraint failed: recipes.source_url'), {
+          code: 'SQLITE_CONSTRAINT',
+          extendedCode: 'SQLITE_CONSTRAINT_UNIQUE',
+        }),
+      }),
+    )
+
+    const { state } = await run(form())
+
+    expect(state?.fieldErrors.sourceUrl).toMatch(/another recipe/i)
+    expect(state?.values.title).toBe('Slow-Roast Gochujang Chicken')
+  })
+
+  it('also recognizes the collision from a bare driver error with no wrapper', async () => {
+    // Belt-and-suspenders alongside the wrapped case above: `isSourceUrlCollision`
+    // walks the `.cause` chain, but it should still recognize the violation if
+    // some future call site ever hands it the unwrapped error directly.
     mocks.updateRecipeContent.mockRejectedValue(
       new Error('SQLITE_CONSTRAINT: UNIQUE constraint failed: recipes.source_url'),
     )
@@ -198,6 +222,12 @@ describe('saveRecipeEdits', () => {
   it('rejects a time beyond the ceiling the extractor uses', async () => {
     const { state } = await run(form({ claimedTimeMinutes: '99999999' }))
     expect(state?.fieldErrors.claimedTimeMinutes).toBeTruthy()
+  })
+
+  it('rejects zero minutes, which is a typo rather than an instant recipe', async () => {
+    const { state } = await run(form({ claimedTimeMinutes: '0' }))
+    expect(state?.fieldErrors.claimedTimeMinutes).toBeTruthy()
+    expect(mocks.updateRecipeContent).not.toHaveBeenCalled()
   })
 
   it('rejects zero servings, which is a typo rather than a quantity', async () => {
@@ -255,6 +285,47 @@ describe('saveRecipeEdits', () => {
       'r1',
       expect.objectContaining({ tags: [{ facet: 'tag', value: 'kid-approved' }] }),
     )
+  })
+
+  it('keeps a non-Latin free-form tag rather than dropping it', async () => {
+    // A library that holds Korean and Italian recipes needs "고추장" to
+    // survive as a tag, not be stripped down to '' by an ASCII-only filter.
+    await run(form({ freeTags: '고추장' }))
+
+    expect(mocks.updateRecipeContent).toHaveBeenCalledWith(
+      expect.anything(),
+      'r1',
+      expect.objectContaining({ tags: [{ facet: 'tag', value: '고추장' }] }),
+    )
+  })
+
+  it('rejects a free-form entry with no usable characters instead of silently dropping it', async () => {
+    const { state } = await run(form({ freeTags: '!!!' }))
+
+    expect(state?.fieldErrors.freeTags).toBeTruthy()
+    expect(mocks.updateRecipeContent).not.toHaveBeenCalled()
+  })
+
+  it('normalizes a forged tag-facet chip value instead of storing it verbatim', async () => {
+    // A Server Action is a public POST endpoint: a `tag` chip value did not
+    // necessarily come from this app's own checkboxes, which only ever emit
+    // already-kebab-cased values. Run it through the same normalization the
+    // free-tag box uses so it dedupes with a matching typed entry and never
+    // stores raw whitespace or mixed case.
+    await run(form({ tag: ['tag:Kid Approved'] }))
+
+    expect(mocks.updateRecipeContent).toHaveBeenCalledWith(
+      expect.anything(),
+      'r1',
+      expect.objectContaining({ tags: [{ facet: 'tag', value: 'kid-approved' }] }),
+    )
+  })
+
+  it('rejects a tag-facet chip that normalizes to nothing, such as pure whitespace', async () => {
+    const { state } = await run(form({ tag: ['tag: '] }))
+
+    expect(state?.fieldErrors.vocabularyTags).toBeTruthy()
+    expect(mocks.updateRecipeContent).not.toHaveBeenCalled()
   })
 
   it('does not store the same tag twice when a chip and a typed tag agree', async () => {

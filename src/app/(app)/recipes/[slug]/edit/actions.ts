@@ -107,14 +107,51 @@ function wholeNumber(raw: string, max: number, label: string): NumberResult {
   return { ok: true, value }
 }
 
-/** `"course:main"` back into a tag, or null if it is not that shape. */
+/**
+ * Unicode-aware kebab-case of `raw`, or null if nothing usable survives.
+ *
+ * This is a recipe library whose owner cooks Korean and Italian food:
+ * "고추장" is a plausible tag, not an edge case, so only whitespace collapses
+ * to a hyphen and everything stripped is punctuation — `\p{L}`/`\p{N}` (with
+ * the `u` flag, so they mean Unicode letter/number categories rather than the
+ * ASCII-only classes a plain `\w` falls back to) keep any script's letters and
+ * digits intact instead of mangling "Crème brûlée" into "crme-brle". An entry
+ * that is nothing but punctuation ("!!!") normalizes to '' and is reported
+ * back to the caller as null, the same way an empty entry already is.
+ */
+function kebabTagValue(raw: string): string | null {
+  const trimmed = raw.trim()
+  if (trimmed === '') return null
+  const value = trimmed.toLowerCase().replace(/\s+/g, '-').replace(/[^\p{L}\p{N}-]+/gu, '')
+  return value.length > 0 ? value : null
+}
+
+/**
+ * `"course:main"` back into a tag, or null if it is not that shape.
+ *
+ * A Server Action is a public POST endpoint like any other, so a chip value
+ * cannot be trusted just because the UI only ever renders normalized ones.
+ * The vocabulary facets are covered by `isValidTag`'s membership check below,
+ * but the open `tag` facet has no fixed vocabulary to check against — without
+ * this, a forged `tag:Kid Approved` or `tag:%20%20` would be accepted
+ * unnormalized: a whitespace-valued row, or a `Kid Approved` that will never
+ * dedupe against the free-tag box's `kid-approved` for the same word. Run a
+ * `tag`-facet value through the same kebab-casing the free-tag path uses
+ * before it is ever compared or stored.
+ */
 function parseChip(raw: string): TagAssignment | null {
   const separator = raw.indexOf(':')
   if (separator <= 0) return null
   const facet = raw.slice(0, separator)
-  const value = raw.slice(separator + 1)
+  const rawValue = raw.slice(separator + 1)
   if (!FACETS.includes(facet as Facet)) return null
-  const tag = { facet: facet as Facet, value }
+
+  if (facet === 'tag') {
+    const value = kebabTagValue(rawValue)
+    return value ? { facet: 'tag', value } : null
+  }
+
+  const tag = { facet: facet as Facet, value: rawValue }
   return isValidTag(tag) ? tag : null
 }
 
@@ -132,8 +169,34 @@ function parseFreeTag(raw: string): TagAssignment | null {
   const known = normalizeTag(trimmed)
   if (known) return known
 
-  const value = trimmed.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '')
-  return value.length > 0 ? { facet: 'tag', value } : null
+  const value = kebabTagValue(trimmed)
+  return value ? { facet: 'tag', value } : null
+}
+
+/**
+ * True when `error` — or anything in its `.cause` chain — is the database's
+ * own UNIQUE-constraint violation on `recipes.source_url`.
+ *
+ * Drizzle wraps every failed libsql statement in a `DrizzleQueryError`, and
+ * that wrapper's own `.message` is the SQL text ("Failed query: insert into
+ * ...\nparams: ..."), never the driver's — the real `LibsqlError`, carrying
+ * `extendedCode` and the SQLite engine's own message text
+ * ("UNIQUE constraint failed: recipes.source_url"), sits one level down on
+ * `.cause`. `extendedCode` is checked first because it is reliable when
+ * present, but it isn't always: `@libsql/client`'s Hrana transport (used for
+ * a remote Turso database rather than a local file) has an open TODO for
+ * parsing it, so the message-text match is kept as a second, transport-proof
+ * check rather than trusted alone. The depth cap guards against an
+ * unanticipated third wrapping layer in a future dependency bump; every
+ * shape seen in practice unwraps in one step.
+ */
+function isSourceUrlCollision(error: unknown): boolean {
+  for (let e: unknown = error, depth = 0; e instanceof Error && depth < 5; e = e.cause, depth++) {
+    const code = (e as { extendedCode?: unknown }).extendedCode
+    if (code === 'SQLITE_CONSTRAINT_UNIQUE' && e.message.includes('source_url')) return true
+    if (e.message.includes('UNIQUE constraint failed') && e.message.includes('source_url')) return true
+  }
+  return false
 }
 
 export async function saveRecipeEdits(
@@ -180,6 +243,12 @@ export async function saveRecipeEdits(
 
   const time = wholeNumber(values.claimedTimeMinutes, MAX_REASONABLE_MINUTES, 'time')
   if (!time.ok) fieldErrors.claimedTimeMinutes = time.error
+  // Zero minutes is not a fast recipe, it is a typo, for the same reason zero
+  // servings is one below: `finalizeMinutes` in `duration.ts` collapses a
+  // zero total to null for exactly this reason ("never confused... with zero
+  // minutes"), and this hand-edit path is the only way a stored `0` could
+  // otherwise happen.
+  else if (time.value === 0) fieldErrors.claimedTimeMinutes = 'Give a time in minutes, or leave it blank.'
 
   const servings = wholeNumber(values.servings, 1_000, 'servings')
   if (!servings.ok) fieldErrors.servings = servings.error
@@ -232,7 +301,15 @@ export async function saveRecipeEdits(
   } else {
     for (const entry of freeEntries) {
       const tag = parseFreeTag(entry)
-      if (tag) addTag(tag)
+      // Same guarantee as the checked-chip loop above: an entry that fails to
+      // parse into anything (all punctuation, e.g. "!!!") is rejected, not
+      // silently dropped. Dropping it would mean a green redirect after the
+      // user typed a tag that never lands on the recipe.
+      if (!tag) {
+        fieldErrors.freeTags = `"${entry}" isn't a usable tag.`
+        break
+      }
+      addTag(tag)
     }
   }
 
@@ -264,12 +341,11 @@ export async function saveRecipeEdits(
     // check and then lose to the database's own UNIQUE constraint on
     // `recipes.source_url` — surfacing here as a thrown driver error rather
     // than the `source_url_taken` result the pre-check returns. Only that
-    // specific, recognizable shape gets the same field-level message the
-    // pre-check gives; anything else is reported generically rather than
-    // guessed at, so an unrelated failure is never misreported as a URL
-    // collision.
-    const message = error instanceof Error ? error.message : ''
-    if (message.includes('UNIQUE constraint failed') && message.includes('source_url')) {
+    // specific, recognizable shape (see `isSourceUrlCollision`) gets the same
+    // field-level message the pre-check gives; anything else is reported
+    // generically rather than guessed at, so an unrelated failure is never
+    // misreported as a URL collision.
+    if (isSourceUrlCollision(error)) {
       return fail({ sourceUrl: 'Another recipe in the library already has that source URL.' })
     }
     return fail({}, 'Something went wrong saving those changes. Nothing was lost — try again.')
