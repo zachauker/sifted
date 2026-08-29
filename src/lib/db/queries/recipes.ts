@@ -202,12 +202,13 @@ export async function upsertRecipe(db: Db, input: UpsertInput): Promise<string> 
       .where(eq(recipes.id, recipeId))
       .get()
 
-    await tx.run(sql`DELETE FROM recipes_fts WHERE recipe_id = ${recipeId}`)
-    await tx.run(sql`
-      INSERT INTO recipes_fts (recipe_id, title, ingredients, steps, notes, narrative)
-      VALUES (${recipeId}, ${extracted.title}, ${ingredientsText(extracted)},
-              ${stepsText(extracted)}, ${existingNote?.notes ?? ''}, ${narrativeText(extracted)})
-    `)
+    await syncFtsRow(tx, recipeId, {
+      title: extracted.title,
+      ingredients: ingredientsText(extracted),
+      steps: stepsText(extracted),
+      notes: existingNote?.notes ?? '',
+      narrative: narrativeText(extracted),
+    })
 
     return recipeId
   })
@@ -544,23 +545,65 @@ function makeSlug(title: string): string {
   return `${base || 'recipe'}-${createId().slice(0, 8)}`
 }
 
+/**
+ * The transaction handle drizzle hands to a `db.transaction` callback. Derived
+ * rather than imported so it cannot drift from the driver in use.
+ */
+type Tx = Parameters<Parameters<Db['transaction']>[0]>[0]
+
+function ingredientLinesText(
+  rows: readonly { section: string | null; rawText: string; item: string | null; note: string | null }[],
+): string {
+  return rows.map((i) => [i.section, i.rawText, i.item, i.note].filter(Boolean).join(' ')).join('\n')
+}
+
+function stepLinesText(rows: readonly { section: string | null; text: string }[]): string {
+  return rows.map((s) => [s.section, s.text].filter(Boolean).join(' ')).join('\n')
+}
+
+function narrativeIndexText(description: string | null, narrativeHtml: string | null): string {
+  // Tags would otherwise be indexed as terms: a search for "strong" should not
+  // match every recipe whose narrative uses bold text.
+  const narrative = (narrativeHtml ?? '').replace(/<[^>]*>/g, ' ')
+  return [description ?? '', narrative].join(' ').replace(/\s+/g, ' ').trim()
+}
+
 function ingredientsText(extracted: ExtractedRecipe): string {
-  return extracted.ingredients
-    .map((i) => [i.section, i.rawText, i.item, i.note].filter(Boolean).join(' '))
-    .join('\n')
+  return ingredientLinesText(extracted.ingredients)
 }
 
 function stepsText(extracted: ExtractedRecipe): string {
-  return extracted.steps
-    .map((s) => [s.section, s.text].filter(Boolean).join(' '))
-    .join('\n')
+  return stepLinesText(extracted.steps)
 }
 
 function narrativeText(extracted: ExtractedRecipe): string {
-  // Tags would otherwise be indexed as terms: a search for "strong" should not
-  // match every recipe whose narrative uses bold text.
-  const narrative = (extracted.narrativeHtml ?? '').replace(/<[^>]*>/g, ' ')
-  return [extracted.description ?? '', narrative].join(' ').replace(/\s+/g, ' ').trim()
+  return narrativeIndexText(extracted.description, extracted.narrativeHtml)
+}
+
+/**
+ * The one place that knows how a `recipes_fts` row is written.
+ *
+ * Delete-then-insert, never a bare insert: a re-import that only replaced the
+ * base row would leave the previous extraction's terms searchable forever, and
+ * a search hit that opens a recipe not containing the term is the kind of bug
+ * nobody reports and everybody distrusts.
+ *
+ * Shared by `upsertRecipe` and `updateRecipeContent`. There are deliberately
+ * no SQL triggers keeping this table in step — one function means one
+ * explicit, testable sync point, and a trigger that silently stops firing is
+ * far harder to notice than a function that fails a test. Two write paths do
+ * not get to mean two copies of this.
+ */
+async function syncFtsRow(
+  tx: Tx,
+  recipeId: string,
+  row: { title: string; ingredients: string; steps: string; notes: string; narrative: string },
+): Promise<void> {
+  await tx.run(sql`DELETE FROM recipes_fts WHERE recipe_id = ${recipeId}`)
+  await tx.run(sql`
+    INSERT INTO recipes_fts (recipe_id, title, ingredients, steps, notes, narrative)
+    VALUES (${recipeId}, ${row.title}, ${row.ingredients}, ${row.steps}, ${row.notes}, ${row.narrative})
+  `)
 }
 
 /**
