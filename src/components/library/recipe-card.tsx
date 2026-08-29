@@ -39,9 +39,13 @@ export function RecipeCard({ entry }: { entry: LibraryEntry }) {
     <li>
       <Link
         href={`/recipes/${entry.slug}`}
-        className="group block rounded-lg outline-offset-4 focus-visible:outline-2"
+        className="group block rounded-lg outline-offset-4"
       >
-        <div className="relative aspect-[4/3] overflow-hidden rounded-lg bg-neutral-100 dark:bg-neutral-800">
+        {/* Lifted rather than outlined, via `--shadow-raised` — a card in this
+            interface is a thing sitting on the page, not a box drawn on it.
+            Two short shadows rather than one long one, so a grid of 156 of
+            these costs the compositor nothing. */}
+        <div className="relative aspect-[4/3] overflow-hidden rounded-lg bg-sunken shadow-(--shadow-raised)">
           {entry.thumbUrl ? (
             <Image
               src={entry.thumbUrl}
@@ -52,34 +56,45 @@ export function RecipeCard({ entry }: { entry: LibraryEntry }) {
               width={THUMB_WIDTH}
               height={THUMB_HEIGHT}
               unoptimized
-              className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.03]"
+              // Transform only, so the browser can run it off the main thread
+              // and the grid never reflows on hover.
+              className="h-full w-full object-cover transition-transform duration-(--dur-slow) ease-(--ease-out-quart) group-hover:scale-[1.04]"
             />
           ) : (
             <PhotoFallback title={entry.title} />
           )}
           {entry.status === 'made_it' && (
-            <span className="absolute top-2 left-2 rounded-full bg-black/70 px-2 py-0.5 text-[11px] font-medium text-white">
+            // Sits on top of an arbitrary photo, so it carries its own opaque
+            // ground rather than trusting whatever is behind it — a white pill
+            // on a pale dish is the one case a translucent badge fails.
+            <span className="absolute top-2 left-2 rounded-full bg-ink px-2 py-0.5 text-2xs font-medium text-bg shadow-sm">
               Made it
             </span>
           )}
         </div>
 
-        <h2 className="mt-2 text-sm leading-snug font-medium group-hover:underline">
+        <h2 className="mt-2.5 text-sm leading-snug font-medium text-ink underline-offset-2 group-hover:underline">
           {entry.title}
         </h2>
 
-        <p className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-neutral-500 dark:text-neutral-400">
-          {entry.publisher && <span>{entry.publisher}</span>}
+        <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-ink-muted">
+          {entry.publisher && <span className="truncate">{entry.publisher}</span>}
           {displayRating !== null && (
             <span>
-              <span aria-hidden="true">{'★'.repeat(displayRating)}</span>
+              {/* Amber, matching the rating control on the recipe page. These
+                  used to be neutral grey here and accent-coloured there — the
+                  same fact, in two different visual languages, on two screens
+                  a click apart. */}
+              <span aria-hidden="true" className="text-accent-text">
+                {'★'.repeat(displayRating)}
+              </span>
               <span className="sr-only">
                 {displayRating} {displayRating === 1 ? 'star' : 'stars'}
               </span>
             </span>
           )}
           {minutes !== null && (
-            <span>
+            <span className="font-num tabular-nums">
               {formatMinutes(minutes)}
               {/* A measured time is a different kind of fact from a
                   publisher's claim, and the card says which it is showing. */}

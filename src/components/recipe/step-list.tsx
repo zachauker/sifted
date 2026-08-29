@@ -44,31 +44,31 @@ export function StepList({ steps }: { steps: readonly DetailStep[] }) {
 
   return (
     <section aria-label="Steps">
-      <h2 className="text-xs font-semibold tracking-wider text-neutral-500 uppercase dark:text-neutral-400">
+      <h2 className="text-lg font-semibold tracking-tight text-ink">
         Steps
       </h2>
 
       {groups.map((group, index) => (
         <div key={`${group.section ?? ''}-${index}`}>
           {group.section && (
-            <h3 className="mt-6 mb-2 text-sm font-medium text-neutral-700 dark:text-neutral-300">
+            <h3 className="mt-6 mb-2 text-sm font-semibold text-ink-muted">
               {group.section}
             </h3>
           )}
           <ol
             start={group.firstNumber}
             aria-label={group.section ?? 'Steps'}
-            className="mt-3 space-y-4"
+            className="mt-3 space-y-5"
           >
             {group.items.map((item, offset) => (
               <li key={item.position} className="flex gap-3">
                 <span
                   aria-hidden="true"
-                  className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-neutral-100 text-xs font-semibold text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300"
+                  className="font-num mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full bg-accent-soft text-xs font-semibold text-accent-on-soft tabular-nums"
                 >
                   {group.firstNumber + offset}
                 </span>
-                <p className="text-[15px] leading-relaxed">{item.text}</p>
+                <p className="max-w-prose text-base leading-relaxed">{item.text}</p>
               </li>
             ))}
           </ol>

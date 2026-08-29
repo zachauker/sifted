@@ -20,7 +20,7 @@ export function LoginForm() {
           type="email"
           autoComplete="email"
           required
-          className="rounded border border-black/15 bg-transparent px-3 py-2 text-base outline-none focus:border-black/40 dark:border-white/20 dark:focus:border-white/40"
+          className="min-h-11 rounded-md border border-line bg-bg px-3 text-base transition-colors duration-(--dur-fast) hover:border-line-strong focus:border-accent"
         />
       </div>
       <div className="flex flex-col gap-1">
@@ -33,18 +33,18 @@ export function LoginForm() {
           type="password"
           autoComplete="current-password"
           required
-          className="rounded border border-black/15 bg-transparent px-3 py-2 text-base outline-none focus:border-black/40 dark:border-white/20 dark:focus:border-white/40"
+          className="min-h-11 rounded-md border border-line bg-bg px-3 text-base transition-colors duration-(--dur-fast) hover:border-line-strong focus:border-accent"
         />
       </div>
       {state?.error && (
-        <p role="alert" className="text-sm text-red-600 dark:text-red-400">
+        <p role="alert" className="rounded-md bg-danger-soft px-3 py-2 text-sm font-medium text-danger">
           {state.error}
         </p>
       )}
       <button
         type="submit"
         disabled={pending}
-        className="mt-2 rounded bg-foreground px-4 py-2 text-base font-medium text-background disabled:opacity-60"
+        className="mt-2 min-h-11 rounded-md bg-accent px-4 text-base font-semibold text-accent-ink transition-colors duration-(--dur-fast) ease-(--ease-out-quart) hover:bg-accent-hover disabled:opacity-60 disabled:hover:bg-accent"
       >
         {pending ? 'Signing in…' : 'Sign in'}
       </button>

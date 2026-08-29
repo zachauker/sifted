@@ -58,7 +58,7 @@ export function initialEditValues(recipe: RecipeDetail): EditFormValues {
 }
 
 const inputClass =
-  'w-full min-h-11 rounded-md border border-black/15 bg-white px-3 py-2 text-base sm:text-sm dark:border-white/20 dark:bg-neutral-900'
+  'min-h-11 w-full rounded-md border border-line bg-bg px-3 py-2 text-base transition-colors duration-(--dur-fast) hover:border-line-strong sm:text-sm'
 
 /**
  * `id` is the field name — `aria-describedby` on the input it belongs to
@@ -70,7 +70,7 @@ const inputClass =
 function FieldError({ id, message }: { id: string; message: string | undefined }) {
   if (!message) return null
   return (
-    <p id={id} className="mt-1 text-sm text-red-700 dark:text-red-300">
+    <p id={id} className="mt-1 text-sm text-danger">
       {message}
     </p>
   )
@@ -121,7 +121,7 @@ export function RecipeEditForm({
       {state?.message && (
         <p
           role="alert"
-          className="rounded-lg bg-red-100 px-3 py-2 text-sm text-red-900 dark:bg-red-950/60 dark:text-red-200"
+          className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger"
         >
           {state.message}
         </p>
@@ -247,7 +247,7 @@ export function RecipeEditForm({
 
       <div>
         <label htmlFor="ingredients" className="mb-1 block text-sm font-medium">Ingredients</label>
-        <p className="mb-1 text-xs text-neutral-500 dark:text-neutral-400">
+        <p className="mb-1 text-xs text-ink-muted">
           One per line, saved exactly as typed. A line ending in a colon — “For the sauce:” —
           becomes a heading for the lines under it.
         </p>
@@ -265,7 +265,7 @@ export function RecipeEditForm({
 
       <div>
         <label htmlFor="steps" className="mb-1 block text-sm font-medium">Steps</label>
-        <p className="mb-1 text-xs text-neutral-500 dark:text-neutral-400">
+        <p className="mb-1 text-xs text-ink-muted">
           One per line. Headings work here too.
         </p>
         <textarea
@@ -287,7 +287,7 @@ export function RecipeEditForm({
             key={facet}
             aria-describedby={errors.vocabularyTags ? 'vocabularyTags-error' : undefined}
           >
-            <legend className="mb-1 text-xs font-semibold tracking-wider text-neutral-500 uppercase dark:text-neutral-400">
+            <legend className="mb-1.5 text-xs font-semibold text-ink-muted">
               {FACET_LABELS[facet]}
             </legend>
             <div className="flex flex-wrap gap-1">
@@ -296,9 +296,9 @@ export function RecipeEditForm({
                 return (
                   <label
                     key={id}
-                    className="inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-full border border-black/15 px-3 text-sm has-checked:bg-neutral-800 has-checked:text-white dark:border-white/20 dark:has-checked:bg-neutral-100 dark:has-checked:text-neutral-900"
+                    className="inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-full border border-line px-3 text-sm transition-colors duration-(--dur-fast) ease-(--ease-out-quart) hover:bg-sunken has-checked:border-accent has-checked:bg-accent has-checked:text-accent-ink"
                   >
-                    <input type="checkbox" name="tag" value={id} defaultChecked={checked.has(id)} className="size-4" />
+                    <input type="checkbox" name="tag" value={id} defaultChecked={checked.has(id)} className="size-4 accent-accent" />
                     {value}
                   </label>
                 )
@@ -310,7 +310,7 @@ export function RecipeEditForm({
 
         <div>
           <label htmlFor="freeTags" className="mb-1 block text-sm font-medium">Other tags</label>
-          <p className="mb-1 text-xs text-neutral-500 dark:text-neutral-400">
+          <p className="mb-1 text-xs text-ink-muted">
             Comma-separated. Anything the library already recognizes is filed under its own facet.
           </p>
           <input
@@ -330,13 +330,13 @@ export function RecipeEditForm({
         <button
           type="submit"
           disabled={pending}
-          className="min-h-11 rounded-md bg-neutral-800 px-4 text-sm text-white disabled:opacity-50 dark:bg-neutral-100 dark:text-neutral-900"
+          className="min-h-11 rounded-md bg-accent px-4 text-sm font-semibold text-accent-ink transition-colors duration-(--dur-fast) ease-(--ease-out-quart) hover:bg-accent-hover disabled:opacity-50 disabled:hover:bg-accent"
         >
           {pending ? 'Saving…' : 'Save recipe'}
         </button>
         <Link
           href={`/recipes/${recipe.slug}`}
-          className="inline-flex min-h-11 items-center px-2 text-sm text-neutral-600 underline underline-offset-2 dark:text-neutral-300"
+          className="inline-flex min-h-11 items-center rounded-md px-2 text-sm font-medium text-ink-muted underline underline-offset-2 transition-colors duration-(--dur-fast) hover:text-ink"
         >
           Cancel
         </Link>

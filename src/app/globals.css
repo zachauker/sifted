@@ -1,26 +1,239 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+/*
+ * Sifted's design tokens.
+ *
+ * Every colour, size, radius and duration the app uses is named here and
+ * nowhere else. Components reference the semantic role ("ink-muted", "line",
+ * "surface"), never a raw Tailwind palette step — which is what makes a change
+ * of mind here a change to one file instead of a change to 28.
+ *
+ * ## The direction: "arm's length"
+ *
+ * Chosen from three candidates. The scene it is built for is specific: a phone
+ * propped against something on a kitchen counter, read from about three feet
+ * away, touched with hands that are wet or floury. Everything below follows
+ * from that sentence — 17px body text rather than the 14px the app used to run
+ * at, a 44px floor under every control, generous gutters, and neutrals at
+ * chroma 0 so that nothing competes with the one colour that means something.
+ *
+ * The rejected alternatives were a cool-grey, dense "instrument" treatment and
+ * a warm-tinted one with monospaced numerals. Both were legible; neither was
+ * built for the counter.
+ *
+ * ## Light only, on purpose
+ *
+ * There is no dark theme and no `dark:` variant anywhere in the app. A kitchen
+ * is a lit room, and a second palette that nobody designed properly is worse
+ * than one that was. `color-scheme: light` below stops the browser rendering
+ * form controls and scrollbars in dark chrome around a light page.
+ *
+ * ## The amber is the app's own
+ *
+ * #b45309 was already Sifted's colour — it is in `public/icon.svg` and
+ * `manifest.json`'s `theme_color`. It was simply never allowed into the
+ * interface, which reached the UI in exactly one component. It is the only
+ * colour here that carries meaning, so it is spent on primary actions, the
+ * current selection, and state, and never on decoration.
+ *
+ * Contrast figures in the comments below are measured against the running app,
+ * not estimated.
+ */
+
+@theme {
+  /* Neutrals at chroma 0. The warmth in this interface comes from the amber
+     and from the photography; tinting the greys as well would muddy both. */
+  --color-bg: oklch(1 0 0);
+  --color-surface: oklch(0.977 0 0);
+  --color-sunken: oklch(0.958 0 0);
+
+  /* ink 18.6:1 · ink-muted 7.3:1 on --color-bg, and 6.4:1 on the darkest
+     surface, so muted text is safe on every ground in the app. `ink-faint` is
+     4.3:1 and is therefore NOT valid for body text — it is reserved for
+     inactive controls (WCAG 1.4.3 exempts those) and decorative glyphs. */
+  --color-ink: oklch(0.185 0 0);
+  --color-ink-muted: oklch(0.455 0 0);
+  --color-ink-faint: oklch(0.58 0 0);
+
+  --color-line: oklch(0.885 0 0);
+  --color-line-strong: oklch(0.80 0 0);
+
+  /*
+   * Two ambers, because a fill and a piece of text are not the same job.
+   *
+   * `accent` is the fill: white on it measures 4.97:1, so it carries buttons,
+   * badges and the selected state. `accent-text` is a step darker and is the
+   * only amber allowed to *be* text, at 6.4:1 on white. Keeping them separate
+   * is what stops an accent link quietly failing AA the first time it lands on
+   * a tinted surface.
+   */
+  --color-accent: oklch(0.552 0.128 62);
+  --color-accent-text: oklch(0.495 0.125 60);
+  --color-accent-hover: oklch(0.44 0.118 58);
+  --color-accent-ink: oklch(1 0 0);
+  --color-accent-soft: oklch(0.96 0.028 75);
+  --color-accent-on-soft: oklch(0.42 0.10 55); /* 7.8:1 on accent-soft */
+
+  --color-danger: oklch(0.505 0.175 25);
+  --color-danger-soft: oklch(0.958 0.025 25);
+  --color-focus: oklch(0.552 0.128 62);
+
+  /* The filter rail's ground is white, same as the page. This direction
+     separates the rail from the grid with space and a single rule rather than
+     with a panel — the "air does the separating" half of arm's length. Named
+     anyway, because "the rail is not a panel" is a decision worth being able
+     to find and reverse in one place. */
+  --color-rail: oklch(1 0 0);
+
+  /* Density: the grid's gutters and the page's padding. Generous, because a
+     glance from three feet needs targets separated by more than a hairline. */
+  --gap-grid-x: 1.5rem;
+  --gap-grid-y: 2.25rem;
+  --gap-page: 1.5rem;
+
+  /* Type. A fixed rem scale, not clamp() — product UI is read at a consistent
+     DPI, and a heading that shrinks inside a narrow column looks broken rather
+     than responsive. Ratio ≈1.25.
+
+     The old app put 128 of its 158 type utilities at 14px or smaller. `sm` is
+     16px here and `base` is 17px, which is the single largest legibility win
+     in the repaint. */
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+  /* Numerals — times, counts, quantities, step numbers. On the body face here;
+     it is the tabular-nums that matter, not a change of family. */
+  --font-num: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+
+  --text-2xs: 0.75rem;      /* 12px — badges only, never prose */
+  --text-xs: 0.875rem;      /* 14px */
+  --text-sm: 1rem;          /* 16px */
+  --text-base: 1.0625rem;   /* 17px — the arm's-length size */
+  --text-lg: 1.25rem;       /* 20px */
+  --text-xl: 1.5rem;        /* 24px */
+  --text-2xl: 1.9375rem;    /* 31px */
+  --text-3xl: 2.375rem;     /* 38px */
+
+  --radius-sm: 0.375rem;
+  --radius-md: 0.625rem;
+  --radius-lg: 0.875rem;
+  --radius-xl: 1.125rem;
+
+  /* A raised thing here is lifted, not outlined. Kept to two very short
+     shadows so a grid of 156 cards costs the compositor nothing. */
+  --shadow-raised: 0 1px 2px oklch(0 0 0 / 0.05), 0 1px 1px oklch(0 0 0 / 0.04);
+  --shadow-overlay: 0 1px 2px oklch(0 0 0 / 0.06), 0 8px 24px oklch(0 0 0 / 0.10);
+
+  /* Motion. 150–250ms: the user is in a task, not watching choreography.
+     Exponential ease-out, no bounce. */
+  --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+  --dur-fast: 120ms;
+  --dur-base: 180ms;
+  --dur-slow: 240ms;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
+/*
+ * A semantic z-index scale. Named steps, so nobody ever has to guess whether
+ * this thing should be 999 or 9999 to sit above that thing.
+ */
+@layer base {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --z-sticky: 30;
+    --z-backdrop: 40;
+    --z-sheet: 50;
+    --z-toast: 60;
+
+    color-scheme: light;
+  }
+
+  html {
+    /* Stops iOS Safari inflating type in landscape without disabling the
+       user's own pinch-zoom, which `user-scalable=no` would. */
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background: var(--color-bg);
+    color: var(--color-ink);
+    /* The bug this replaces: globals.css used to hard-code
+       `font-family: Arial, Helvetica, sans-serif` here, which overrode the
+       Geist variable that layout.tsx goes to the trouble of loading. Every
+       screen in the app rendered in Arial while two woff2 families were
+       downloaded and discarded on each page load. */
+    font-family: var(--font-sans);
+    font-size: var(--text-base);
+    line-height: 1.55;
+  }
+
+  /* Even line lengths on headings, fewer orphans in prose. */
+  h1, h2, h3 {
+    text-wrap: balance;
+  }
+  p {
+    text-wrap: pretty;
+  }
+
+  /*
+   * One focus ring for the whole app, defined once.
+   *
+   * The audit found 4 focus declarations across 69 interactive elements; the
+   * rest fell back to the UA ring, which lands inconsistently on custom pill
+   * and card shapes. This is the app's answer, and components only override
+   * `outline-offset` when a shape needs it.
+   */
+  :focus-visible {
+    outline: 2px solid var(--color-focus);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+  }
+
+  /* Placeholders measured 3.4:1 against white and failed AA. `ink-faint` is
+     4.3:1, still short, so placeholders use `ink-muted` (7.3:1) instead — a
+     placeholder is content you have to read to know what the field wants. */
+  ::placeholder {
+    color: var(--color-ink-muted);
+    opacity: 1;
+  }
+
+  ::selection {
+    background: var(--color-accent-soft);
+    color: var(--color-accent-on-soft);
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/*
+ * The bottom sheet's entrance, and the only keyframed animation in the app.
+ *
+ * It travels 8% of its own height rather than a fixed distance, so a short
+ * sheet does not fly further than a tall one, and it moves on transform and
+ * opacity only — nothing here can cause a layout pass. Under
+ * `prefers-reduced-motion` the block below collapses the duration and the
+ * sheet simply appears, which is the correct alternative: the sheet is
+ * already a state change the user asked for by tapping Filters, so it needs
+ * no reveal to be understood.
+ */
+@keyframes sheet-in {
+  from {
+    transform: translateY(8%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+/*
+ * Reduced motion. Not optional, and not a blanket `animation: none` — the
+ * point is that state changes still register, they just stop moving. Anything
+ * that conveys state resolves instantly instead of travelling.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

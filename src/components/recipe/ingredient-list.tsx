@@ -61,14 +61,14 @@ export function IngredientList({ ingredients }: { ingredients: readonly DetailIn
       aria-label="Ingredients"
       className="lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:self-start lg:overflow-y-auto"
     >
-      <h2 className="text-xs font-semibold tracking-wider text-neutral-500 uppercase dark:text-neutral-400">
+      <h2 className="text-lg font-semibold tracking-tight text-ink">
         Ingredients
       </h2>
 
       {groups.map((group, index) => (
         <div key={`${group.section ?? ''}-${index}`} className="mt-3">
           {group.section && (
-            <h3 className="mt-4 mb-1 text-sm font-medium text-neutral-700 dark:text-neutral-300">
+            <h3 className="mt-4 mb-1 text-sm font-semibold text-ink-muted">
               {group.section}
             </h3>
           )}
@@ -81,12 +81,12 @@ export function IngredientList({ ingredients }: { ingredients: readonly DetailIn
                     even for a one-word ingredient, while `items-start`
                     keeps the checkbox aligned to the first line of a
                     line that wraps to two or three. */}
-                <label className="flex min-h-11 cursor-pointer items-start gap-2 py-2 text-sm leading-snug">
+                <label className="flex min-h-11 cursor-pointer items-start gap-3 rounded-md py-2 text-base leading-snug transition-colors duration-(--dur-fast) hover:bg-sunken">
                   <input
                     type="checkbox"
-                    className="peer mt-0.5 h-4 w-4 shrink-0 self-start accent-neutral-700 dark:accent-neutral-300"
+                    className="peer mt-1 size-[1.15em] shrink-0 self-start accent-accent"
                   />
-                  <span className="peer-checked:text-neutral-400 peer-checked:line-through dark:peer-checked:text-neutral-600">
+                  <span className="transition-colors duration-(--dur-fast) peer-checked:text-ink-faint peer-checked:line-through">
                     {item.rawText}
                   </span>
                 </label>

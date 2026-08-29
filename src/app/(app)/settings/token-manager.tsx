@@ -105,17 +105,17 @@ export function TokenManager({ initialTokens }: { initialTokens: TokenSummary[] 
   return (
     <div className="flex flex-col gap-6">
       {justIssued && (
-        <div className="rounded border border-amber-600/40 bg-amber-50 p-4 text-sm dark:bg-amber-950/30">
+        <div className="rounded border border-accent bg-accent-soft p-4 text-sm">
           <p className="font-medium">
             Token for &quot;{justIssued.label}&quot; — copy it now
           </p>
-          <p className="mt-1 text-neutral-700 dark:text-neutral-300">
+          <p className="mt-1 text-ink">
             This is the only time this value will ever be shown. Only its hash is stored, so
             there is no way to display it again later — if it&apos;s lost, revoke this token and
             issue a new one.
           </p>
           <div className="mt-2 flex items-center gap-2">
-            <code className="flex-1 overflow-x-auto rounded bg-black/5 px-2 py-1.5 text-xs break-all dark:bg-white/10">
+            <code className="flex-1 overflow-x-auto rounded bg-sunken px-2 py-1.5 text-xs break-all">
               {justIssued.token}
             </code>
             <button
@@ -129,7 +129,7 @@ export function TokenManager({ initialTokens }: { initialTokens: TokenSummary[] 
                   // selectable text right above this button.
                 }
               }}
-              className="shrink-0 rounded border border-black/20 px-2 py-1.5 text-xs font-medium dark:border-white/20"
+              className="min-h-11 shrink-0 rounded-md border border-line px-3 text-xs font-medium transition-colors duration-(--dur-fast) hover:bg-sunken"
             >
               {copied ? 'Copied' : 'Copy'}
             </button>
@@ -155,24 +155,24 @@ export function TokenManager({ initialTokens }: { initialTokens: TokenSummary[] 
           value={label}
           onChange={(e) => setLabel(e.target.value)}
           disabled={issueState.kind === 'submitting'}
-          className="w-full rounded border border-black/20 bg-transparent px-3 py-2 text-sm disabled:opacity-50 dark:border-white/20"
+          className="min-h-11 w-full rounded-md border border-line bg-bg px-3 text-base transition-colors duration-(--dur-fast) hover:border-line-strong disabled:opacity-50 sm:text-sm"
         />
         <button
           type="submit"
           disabled={issueState.kind === 'submitting'}
-          className="shrink-0 rounded border border-black/20 px-3 py-2 text-sm font-medium disabled:opacity-50 dark:border-white/20"
+          className="min-h-11 shrink-0 rounded-md bg-accent px-4 text-sm font-semibold text-accent-ink transition-colors duration-(--dur-fast) ease-(--ease-out-quart) hover:bg-accent-hover disabled:opacity-50 disabled:hover:bg-accent"
         >
           {issueState.kind === 'submitting' ? 'Issuing…' : 'Issue new token'}
         </button>
       </form>
       {issueState.kind === 'error' && (
-        <p role="alert" className="text-sm text-red-700 dark:text-red-400">
+        <p role="alert" className="text-sm text-danger">
           {issueState.message}
         </p>
       )}
 
       {tokens.length === 0 ? (
-        <p className="text-sm text-neutral-600 dark:text-neutral-400">
+        <p className="text-sm text-ink-muted">
           No tokens yet. Issue one above for the iOS Shortcut to use.
         </p>
       ) : (
@@ -183,11 +183,11 @@ export function TokenManager({ initialTokens }: { initialTokens: TokenSummary[] 
             return (
               <li
                 key={t.id}
-                className="flex items-center justify-between gap-4 rounded border border-black/10 p-3 text-sm dark:border-white/10"
+                className="flex items-center justify-between gap-4 rounded border border-line p-3 text-sm"
               >
                 <div>
                   <p className="font-medium">{t.label}</p>
-                  <p className="text-neutral-500 dark:text-neutral-400">
+                  <p className="text-ink-muted">
                     {revoked
                       ? `Revoked ${formatDate(t.revokedAt)}`
                       : lastUsed
@@ -195,7 +195,7 @@ export function TokenManager({ initialTokens }: { initialTokens: TokenSummary[] 
                         : 'Never used'}
                   </p>
                   {revokeError?.id === t.id && (
-                    <p role="alert" className="mt-1 text-red-700 dark:text-red-400">
+                    <p role="alert" className="mt-1 text-danger">
                       {revokeError.message}
                     </p>
                   )}
@@ -205,7 +205,7 @@ export function TokenManager({ initialTokens }: { initialTokens: TokenSummary[] 
                     type="button"
                     onClick={() => revoke(t.id)}
                     disabled={revokingId === t.id}
-                    className="shrink-0 rounded border border-black/20 px-3 py-1.5 font-medium disabled:opacity-50 dark:border-white/20"
+                    className="shrink-0 rounded border border-line px-3 py-1.5 font-medium disabled:opacity-50"
                   >
                     {revokingId === t.id ? 'Revoking…' : 'Revoke'}
                   </button>

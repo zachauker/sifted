@@ -77,10 +77,12 @@ export function RecipeView({ recipe }: { recipe: RecipeDetail }) {
     >
       <article className="mx-auto w-full max-w-5xl px-4 py-6 sm:px-6">
         <header>
-          <h1 className="text-2xl leading-tight font-semibold sm:text-3xl">{recipe.title}</h1>
+          <h1 className="text-2xl leading-tight font-semibold tracking-tight text-balance sm:text-3xl">
+            {recipe.title}
+          </h1>
 
           {(recipe.publisher || recipe.author || recipe.sourceUrl) && (
-            <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-neutral-500 dark:text-neutral-400">
+            <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-ink-muted">
               {recipe.publisher && <span>{recipe.publisher}</span>}
               {recipe.publisher && recipe.author && <span aria-hidden="true">·</span>}
               {recipe.author && <span>{recipe.author}</span>}
@@ -91,7 +93,7 @@ export function RecipeView({ recipe }: { recipe: RecipeDetail }) {
                   // tab and never gets a handle on this one via `window.opener`.
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="underline underline-offset-2 hover:text-neutral-800 dark:hover:text-neutral-200"
+                  className="rounded-sm text-accent-text underline underline-offset-2 transition-colors duration-(--dur-fast) hover:text-accent-hover"
                 >
                   {sourceLabel ? `View the original on ${sourceLabel}` : 'View the original'}
                 </a>
@@ -103,10 +105,10 @@ export function RecipeView({ recipe }: { recipe: RecipeDetail }) {
               above: that line renders only when a publisher, author or source
               exists, and the recipes most likely to need correcting are
               exactly the sparse ones that have none of them. */}
-          <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-neutral-500 dark:text-neutral-400">
+          <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-ink-muted">
             <Link
               href={`/recipes/${recipe.slug}/edit`}
-              className="inline-flex min-h-11 items-center underline underline-offset-2 hover:text-neutral-800 dark:hover:text-neutral-200"
+              className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-md border border-line px-3 text-sm font-medium text-ink transition-colors duration-(--dur-fast) ease-(--ease-out-quart) hover:bg-sunken"
             >
               Edit
             </Link>
@@ -119,7 +121,7 @@ export function RecipeView({ recipe }: { recipe: RecipeDetail }) {
           </p>
 
           {recipe.description && (
-            <p className="mt-3 max-w-prose text-[15px] text-neutral-600 dark:text-neutral-300">
+            <p className="mt-3 max-w-prose text-base text-ink-muted">
               {recipe.description}
             </p>
           )}
@@ -157,7 +159,19 @@ export function RecipeView({ recipe }: { recipe: RecipeDetail }) {
               // it's scrolled into view — which, above the fold, it
               // already is.
               priority
-              className="mt-5 aspect-[3/2] w-full rounded-xl object-cover"
+              // Capped, and this is the point of the whole page.
+              //
+              // `aspect-[3/2] w-full` alone drew this 651px tall at the
+              // article's 974px max width, which put the first ingredient
+              // 122px below the fold of a 900px-tall window — you could not
+              // see a single thing you were meant to cook with until you
+              // scrolled. That is the food-blog failure this app was built to
+              // undo, reproduced with a nicer photo. The height cap keeps the
+              // photo (it is genuinely useful for recognising the dish) and
+              // takes back the two thirds of the first screen it was spending
+              // on itself. Mobile never hit the cap — 375px at 3:2 is 250px —
+              // so this only binds where the image was actually the problem.
+              className="mt-5 max-h-[min(38vh,400px)] w-full rounded-xl object-cover"
             />
           )}
 
@@ -171,7 +185,7 @@ export function RecipeView({ recipe }: { recipe: RecipeDetail }) {
                     // hand-assembled, so the parameter name and its encoding
                     // stay owned by one module.
                     href={`/${filterStateToQuery({ selected: [`${tag.facet}:${tag.value}`], sort: DEFAULT_SORT })}`}
-                    className="inline-block rounded-full border border-black/10 px-2.5 py-0.5 text-xs text-neutral-600 hover:border-black/25 dark:border-white/15 dark:text-neutral-300 dark:hover:border-white/35"
+                    className="inline-flex min-h-11 items-center rounded-full border border-line px-3 text-xs font-medium text-ink-muted transition-colors duration-(--dur-fast) ease-(--ease-out-quart) hover:border-accent hover:bg-accent-soft hover:text-accent-on-soft"
                   >
                     {humanizeTagValue(tag.value)}
                   </Link>
@@ -187,8 +201,8 @@ export function RecipeView({ recipe }: { recipe: RecipeDetail }) {
         <div
           className={
             twoColumn
-              ? 'mt-8 grid gap-8 lg:grid-cols-[minmax(0,18rem)_minmax(0,1fr)] lg:gap-12'
-              : 'mt-8 grid gap-8'
+              ? 'mt-10 grid gap-8 lg:grid-cols-[minmax(0,19rem)_minmax(0,1fr)] lg:gap-14'
+              : 'mt-10 grid gap-8'
           }
         >
           <IngredientList ingredients={recipe.ingredients} />
@@ -197,7 +211,7 @@ export function RecipeView({ recipe }: { recipe: RecipeDetail }) {
             // Said out loud, because silence here is indistinguishable from a
             // bug. These are the hand-typed family recipes the migration
             // rescued: the ingredients were all anyone ever wrote down.
-            <p className="text-sm text-neutral-500 dark:text-neutral-400">
+            <p className="rounded-lg bg-sunken px-4 py-3 text-sm text-ink-muted">
               No steps were saved with this recipe.
             </p>
           )}

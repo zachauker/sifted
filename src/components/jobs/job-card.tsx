@@ -67,9 +67,9 @@ async function postRetry(jobId: string, html?: string): Promise<RetryState> {
  */
 function SentNotice() {
   return (
-    <p className="mt-2 text-sm text-neutral-600 dark:text-neutral-400">
+    <p className="mt-2 text-sm text-ink-muted">
       Retry sent. This list is a snapshot from when the page loaded —{' '}
-      <a href="/needs-attention" className="underline underline-offset-2">
+      <a href="/needs-attention" className="rounded-sm font-medium text-accent-text underline underline-offset-2">
         reload
       </a>{' '}
       in a few seconds to see the result.
@@ -91,12 +91,12 @@ function RetryButton({ jobId, label }: { jobId: string; label: string }) {
           setState({ kind: 'sending' })
           setState(await postRetry(jobId))
         }}
-        className="rounded border border-black/20 px-3 py-1.5 text-sm font-medium disabled:opacity-50 dark:border-white/20"
+        className="min-h-11 rounded-md border border-line px-4 text-sm font-medium transition-colors duration-(--dur-fast) ease-(--ease-out-quart) hover:bg-sunken disabled:opacity-50"
       >
         {state.kind === 'sending' ? 'Retrying…' : label}
       </button>
       {state.kind === 'error' && (
-        <p role="alert" className="mt-2 text-sm text-red-700 dark:text-red-400">
+        <p role="alert" className="mt-2 text-sm text-danger">
           {state.message}
         </p>
       )}
@@ -136,12 +136,12 @@ function PasteHtmlForm({ jobId }: { jobId: string }) {
 
   return (
     <div className="mt-2">
-      <p className="text-sm text-neutral-600 dark:text-neutral-400">
+      <p className="text-sm text-ink-muted">
         Open the page in your own browser, right-click anywhere on it and choose{' '}
         <strong>View Page Source</strong> (Ctrl+U on Windows, Cmd+Option+U on a Mac). Select
         all of that page, copy it, and paste it below.
       </p>
-      <p className="mt-2 text-sm text-neutral-600 dark:text-neutral-400">
+      <p className="mt-2 text-sm text-ink-muted">
         On a phone, View Page Source isn&apos;t available — instead, re-share the page using
         the &quot;send page contents&quot; Shortcut described in{' '}
         <code className="text-xs">docs/ios-shortcut.md</code>, which attaches the page itself
@@ -156,10 +156,10 @@ function PasteHtmlForm({ jobId }: { jobId: string }) {
         onChange={(e) => setHtml(e.target.value)}
         placeholder="Paste the page source here"
         rows={4}
-        className="mt-2 w-full rounded border border-black/20 bg-transparent p-2 font-mono text-xs dark:border-white/20"
+        className="mt-2 w-full rounded-md border border-line bg-bg p-3 font-mono text-xs leading-relaxed transition-colors duration-(--dur-fast) hover:border-line-strong"
       />
-      <div className="mt-1 flex items-center justify-between text-xs text-neutral-500 dark:text-neutral-400">
-        <span className={tooLarge ? 'text-red-700 dark:text-red-400' : undefined}>
+      <div className="mt-1 flex items-center justify-between text-xs text-ink-muted">
+        <span className={tooLarge ? 'text-danger' : undefined}>
           {formatBytes(bytes)} of {formatBytes(MAX_HTML_BYTES)} max
         </span>
       </div>
@@ -170,12 +170,12 @@ function PasteHtmlForm({ jobId }: { jobId: string }) {
           setState({ kind: 'sending' })
           setState(await postRetry(jobId, html))
         }}
-        className="mt-2 rounded border border-black/20 px-3 py-1.5 text-sm font-medium disabled:opacity-50 dark:border-white/20"
+        className="mt-2 min-h-11 rounded-md bg-accent px-4 text-sm font-semibold text-accent-ink transition-colors duration-(--dur-fast) ease-(--ease-out-quart) hover:bg-accent-hover disabled:opacity-50 disabled:hover:bg-accent"
       >
         {state.kind === 'sending' ? 'Retrying…' : 'Retry with pasted HTML'}
       </button>
       {state.kind === 'error' && (
-        <p role="alert" className="mt-2 text-sm text-red-700 dark:text-red-400">
+        <p role="alert" className="mt-2 text-sm text-danger">
           {state.message}
         </p>
       )}
@@ -185,8 +185,8 @@ function PasteHtmlForm({ jobId }: { jobId: string }) {
 
 function CardShell({ url, children }: { url: string; children: ReactNode }) {
   return (
-    <li className="rounded border border-black/10 p-4 dark:border-white/10">
-      <p className="break-all text-sm text-neutral-500 dark:text-neutral-400">{url}</p>
+    <li className="rounded-lg border border-line bg-surface p-4">
+      <p className="break-all text-sm text-ink-muted">{url}</p>
       {children}
     </li>
   )
@@ -202,7 +202,7 @@ export function JobCard({ job, onDismiss }: { job: Job; onDismiss: (id: string) 
       return (
         <CardShell url={job.url}>
           <p className="mt-1 font-medium">Stopped partway</p>
-          <p className="mt-1 text-sm text-neutral-600 dark:text-neutral-400">
+          <p className="mt-1 text-sm text-ink-muted">
             This import started a while ago and never finished — it was most
             likely cut short. Nothing was saved. Retrying starts it again.
           </p>
@@ -214,7 +214,7 @@ export function JobCard({ job, onDismiss }: { job: Job; onDismiss: (id: string) 
     return (
       <CardShell url={job.url}>
         <p className="mt-1 font-medium">In progress</p>
-        <p className="mt-1 text-sm text-neutral-600 dark:text-neutral-400">
+        <p className="mt-1 text-sm text-ink-muted">
           This import is running right now — nothing to do yet.
         </p>
       </CardShell>
@@ -225,7 +225,7 @@ export function JobCard({ job, onDismiss }: { job: Job; onDismiss: (id: string) 
     return (
       <CardShell url={job.url}>
         <p className="mt-1 font-medium">Queued</p>
-        <p className="mt-1 text-sm text-neutral-600 dark:text-neutral-400">
+        <p className="mt-1 text-sm text-ink-muted">
           Waiting to start. If this has been sitting here a while, you can retry it.
         </p>
         <div className="mt-2">
@@ -243,7 +243,7 @@ export function JobCard({ job, onDismiss }: { job: Job; onDismiss: (id: string) 
   return (
     <CardShell url={job.url}>
       <p className="mt-1 font-medium">{explanation.heading}</p>
-      <p className="mt-1 text-sm text-neutral-600 dark:text-neutral-400">{explanation.body}</p>
+      <p className="mt-1 text-sm text-ink-muted">{explanation.body}</p>
 
       {explanation.action === 'retry' && (
         <div className="mt-2">
@@ -258,11 +258,11 @@ export function JobCard({ job, onDismiss }: { job: Job; onDismiss: (id: string) 
           <button
             type="button"
             onClick={() => onDismiss(job.id)}
-            className="rounded border border-black/20 px-3 py-1.5 text-sm font-medium dark:border-white/20"
+            className="inline-flex min-h-11 items-center rounded-md border border-line px-4 text-sm font-medium transition-colors duration-(--dur-fast) ease-(--ease-out-quart) hover:bg-sunken"
           >
             Remove from this list
           </button>
-          <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+          <p className="mt-1 text-xs text-ink-muted">
             This only hides it on this device — it doesn&apos;t delete anything on the server.
           </p>
         </div>

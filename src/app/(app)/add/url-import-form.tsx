@@ -217,12 +217,12 @@ export function UrlImportForm({
           value={url}
           onChange={(e) => setUrl(e.target.value)}
           disabled={busy}
-          className="w-full rounded border border-black/20 bg-transparent px-3 py-2 text-sm disabled:opacity-50 dark:border-white/20"
+          className="min-h-11 w-full rounded-md border border-line bg-bg px-3 text-base transition-colors duration-(--dur-fast) hover:border-line-strong disabled:opacity-50 sm:text-sm"
         />
         <button
           type="submit"
           disabled={busy}
-          className="shrink-0 rounded border border-black/20 px-3 py-2 text-sm font-medium disabled:opacity-50 dark:border-white/20"
+          className="min-h-11 shrink-0 rounded-md bg-accent px-4 text-sm font-semibold text-accent-ink transition-colors duration-(--dur-fast) ease-(--ease-out-quart) hover:bg-accent-hover disabled:opacity-50 disabled:hover:bg-accent"
         >
           {busy ? 'Saving…' : 'Save'}
         </button>
@@ -230,7 +230,7 @@ export function UrlImportForm({
 
       <div className="mt-3 text-sm" aria-live="polite">
         {phase.kind === 'polling' && (
-          <p className="text-neutral-600 dark:text-neutral-400">
+          <p className="text-ink-muted">
             {phase.status === 'queued' ? 'Queued…' : 'Importing…'}
           </p>
         )}
@@ -264,7 +264,7 @@ export function UrlImportForm({
         )}
 
         {phase.kind === 'failed' && (
-          <p role="alert" className="text-red-700 dark:text-red-400">
+          <p role="alert" className="text-danger">
             That import failed.{' '}
             <Link href="/needs-attention" className="underline underline-offset-2">
               See what went wrong
@@ -284,7 +284,7 @@ export function UrlImportForm({
         )}
 
         {phase.kind === 'error' && (
-          <p role="alert" className="text-red-700 dark:text-red-400">
+          <p role="alert" className="text-danger">
             {phase.message}
           </p>
         )}

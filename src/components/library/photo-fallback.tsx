@@ -45,7 +45,7 @@ export function PhotoFallback({ title }: { title: string }) {
         <path d="M18 13v8" />
       </svg>
       <span
-        className="line-clamp-3 font-serif text-base leading-tight font-medium text-black/70"
+        className="line-clamp-3 font-serif text-base leading-tight font-medium"
         style={{ color: `hsl(${hue} 55% 22%)` }}
       >
         {title}

@@ -13,7 +13,7 @@ import { RecipeCard } from './recipe-card'
  */
 export function RecipeGrid({ entries }: { entries: readonly LibraryEntry[] }) {
   return (
-    <ul className="grid grid-cols-2 gap-x-4 gap-y-6 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+    <ul className="grid grid-cols-2 gap-x-(--gap-grid-x) gap-y-(--gap-grid-y) sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
       {entries.map((entry) => (
         <RecipeCard key={entry.id} entry={entry} />
       ))}

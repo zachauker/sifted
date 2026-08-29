@@ -23,7 +23,7 @@ export default async function NeedsAttentionPage() {
   return (
     <div className="mx-auto w-full max-w-2xl px-4 py-6">
       <h1 className="mb-1 text-xl font-semibold">Needs attention</h1>
-      <p className="mb-6 text-sm text-neutral-500 dark:text-neutral-400">
+      <p className="mb-6 text-sm text-ink-muted">
         Imports that failed, or that haven&apos;t finished yet.
       </p>
       <NeedsAttentionTray jobs={jobs} />

@@ -310,7 +310,11 @@ describe('the rail on a phone', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Show 3 recipes' }))
 
     expect(screen.queryByRole('checkbox', { name: /seafood/i })).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Filters (1)' })).toBeInTheDocument()
+    // The count moved out of the visible label and into a badge beside it, so
+    // the accessible name now spells out what the number counts rather than
+    // parenthesising it. Same guarantee as before: closing the sheet does not
+    // lose the fact that one filter is on.
+    expect(screen.getByRole('button', { name: 'Filters, 1 selected' })).toBeInTheDocument()
     expect(cardTitles()).toHaveLength(3)
   })
 
