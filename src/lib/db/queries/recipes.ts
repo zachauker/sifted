@@ -186,10 +186,6 @@ export async function upsertRecipe(db: Db, input: UpsertInput): Promise<string> 
       }))).onConflictDoNothing()
     }
 
-    // Delete-then-insert, never a bare insert: a re-import that only replaced
-    // the base row would leave the previous extraction's terms searchable
-    // forever, and a search hit that opens a recipe not containing the term is
-    // the kind of bug nobody reports and everybody distrusts.
     // Carry the household note across. It is user-authored and never arrives
     // from extraction, so rewriting the row with an empty notes column would
     // leave a note that is still stored and still displayed but no longer
