@@ -99,6 +99,25 @@ export function RecipeView({ recipe }: { recipe: RecipeDetail }) {
             </p>
           )}
 
+          {/* Its own row rather than a sibling inside the attribution line
+              above: that line renders only when a publisher, author or source
+              exists, and the recipes most likely to need correcting are
+              exactly the sparse ones that have none of them. */}
+          <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-neutral-500 dark:text-neutral-400">
+            <Link
+              href={`/recipes/${recipe.slug}/edit`}
+              className="inline-flex min-h-11 items-center underline underline-offset-2 hover:text-neutral-800 dark:hover:text-neutral-200"
+            >
+              Edit
+            </Link>
+            {recipe.handEdited && (
+              // The counterpart to the warning a re-import will show: a recipe
+              // carrying corrections nothing can regenerate should say so,
+              // where the rest of its provenance is already stated.
+              <span>Edited by hand</span>
+            )}
+          </p>
+
           {recipe.description && (
             <p className="mt-3 max-w-prose text-[15px] text-neutral-600 dark:text-neutral-300">
               {recipe.description}

@@ -866,3 +866,39 @@ describe('the page', () => {
     ).rejects.toMatchObject({ digest: 'NEXT_HTTP_ERROR_FALLBACK;404' })
   })
 })
+
+describe('editing a recipe', () => {
+  it('offers a way in to the editor', () => {
+    render(<RecipeView recipe={recipe()} />)
+
+    expect(screen.getByRole('link', { name: /^edit$/i })).toHaveAttribute(
+      'href',
+      '/recipes/gochujang-chicken/edit',
+    )
+  })
+
+  it('offers it even on a recipe with no publisher, author or source', () => {
+    // Four migrated recipes have no source at all, and the attribution line
+    // they share the header with renders only when one of those three exists.
+    // The way in must not be inside it.
+    render(
+      <RecipeView
+        recipe={recipe({ publisher: null, author: null, sourceUrl: null, sourceDomain: null })}
+      />,
+    )
+
+    expect(screen.getByRole('link', { name: /^edit$/i })).toBeInTheDocument()
+  })
+
+  it('says nothing about hand-editing for a recipe nobody has touched', () => {
+    render(<RecipeView recipe={recipe({ handEdited: false })} />)
+
+    expect(screen.queryByText(/edited by hand/i)).not.toBeInTheDocument()
+  })
+
+  it('marks a recipe someone has corrected', () => {
+    render(<RecipeView recipe={recipe({ handEdited: true })} />)
+
+    expect(screen.getByText(/edited by hand/i)).toBeInTheDocument()
+  })
+})
