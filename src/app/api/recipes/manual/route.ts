@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm'
 import { z } from 'zod'
 import { auth } from '@/lib/auth'
 import { db } from '@/lib/db'
+import { parseLines } from '@/lib/recipe-text'
 import { upsertRecipe } from '@/lib/db/queries/recipes'
 import { recipes } from '@/lib/db/schema'
 import type { ExtractedIngredient, ExtractedStep } from '@/lib/extract/types'
@@ -27,27 +28,6 @@ const bodySchema = z.object({
   claimedTimeMinutes: z.coerce.number().int().positive().nullish(),
   servings: z.coerce.number().int().positive().nullish(),
 })
-
-/**
- * One entry per non-blank line, trimmed.
- *
- * A blank line — including one that is only whitespace — is dropped rather
- * than stored as an empty ingredient or step row; a stray blank line from
- * pasting a recipe out of Notes or an email must not become a phantom row
- * with nothing in it.
- *
- * Splits on `\r\n`, `\r`, and `\n` so a textarea's value survives a paste
- * from Windows (`\r\n`) as cleanly as from anywhere else — a lone `\r` left
- * in would otherwise ride along inside the last "line" of a `\r\n`-joined
- * paste, or turn a single logical line into two.
- */
-function parseLines(raw: string | null | undefined): string[] {
-  if (!raw) return []
-  return raw
-    .split(/\r\n|\r|\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-}
 
 export async function POST(request: Request) {
   const session = await auth()
