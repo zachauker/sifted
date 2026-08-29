@@ -13,6 +13,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "extract": "tsx scripts/extract-url.ts",
+    "import": "tsx --env-file-if-exists=.env.local scripts/import-url.ts",
     "db:generate": "node --env-file-if-exists=.env.local ./node_modules/.bin/drizzle-kit generate",
     "db:migrate": "node --env-file-if-exists=.env.local ./node_modules/.bin/drizzle-kit migrate",
     "db:studio": "node --env-file-if-exists=.env.local ./node_modules/.bin/drizzle-kit studio",

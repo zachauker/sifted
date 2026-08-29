@@ -1440,10 +1440,18 @@ async function loadRuntime() {
  * ride out; aborting the whole migration over it would be wrong.
  */
 export async function preflight(deps: {
-  store: BlobStore
+  /**
+   * Null when the caller writes no blobs at all — `--enrich-only` re-runs the
+   * model against recipes already in the database and touches neither storage
+   * nor the network. Probing a store it will never use would turn a missing
+   * blob token into a refusal to do work that does not need one.
+   */
+  store: BlobStore | null
   llm: LlmClient
   log: (message: string) => void
 }): Promise<void> {
+  if (!deps.store) deps.log('preflight: blob storage not needed')
+  else {
   const key = 'preflight/write-check.txt'
   try {
     await deps.store.put(key, new TextEncoder().encode('ok'), 'text/plain')
@@ -1467,6 +1475,7 @@ export async function preflight(deps: {
     )
   }
   deps.log('preflight: blob storage OK')
+  }
 
   try {
     await deps.llm.enrich({

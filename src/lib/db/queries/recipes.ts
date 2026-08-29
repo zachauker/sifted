@@ -562,3 +562,79 @@ function narrativeText(extracted: ExtractedRecipe): string {
   const narrative = (extracted.narrativeHtml ?? '').replace(/<[^>]*>/g, ' ')
   return [extracted.description ?? '', narrative].join(' ').replace(/\s+/g, ' ').trim()
 }
+
+/**
+ * The parsed columns and tags enrichment produces, applied to a recipe that is
+ * already stored.
+ *
+ * This exists because the documented repair for an unenriched recipe — "re-import
+ * it" — is impossible for the recipes that need it most. A recipe recovered from
+ * a Notion page body has no fetchable source URL, or has one whose publisher
+ * refuses us; re-importing it fetches nothing, so it can never gain the tags it
+ * is missing. Those recipes would stay permanently unfilterable, which in an app
+ * whose whole purpose is filtering means permanently invisible.
+ *
+ * Enrichment does not need the page. It needs the title and the ingredient
+ * lines, and both are already in the database — so this re-runs it against what
+ * is stored and writes back only what enrichment owns.
+ *
+ * Deliberately NOT `upsertRecipe`: that rewrites ingredients, steps and the
+ * narrative from an `ExtractedRecipe`, and reconstructing one from the database
+ * to feed it back in would risk storing a worse copy of a recipe than the one
+ * already there — the exact downgrade `refuseBodyDowngrade` exists to prevent.
+ * Here `rawText` is never touched, steps and narrative are never touched, and
+ * only `extracted` tags are replaced, on the same reasoning as `upsertRecipe`:
+ * a Notion or user tag is not derivable from the page and must survive.
+ *
+ * The FTS row is intentionally left alone. It indexes title, ingredient
+ * `rawText`, steps, notes and narrative — none of which enrichment changes.
+ */
+export type StoredEnrichment = {
+  tags: TagAssignment[]
+  ingredients: {
+    position: number
+    quantity: number | null
+    unit: string | null
+    item: string | null
+    note: string | null
+  }[]
+}
+
+export async function enrichStoredRecipe(
+  db: Db,
+  recipeId: string,
+  enriched: StoredEnrichment,
+): Promise<void> {
+  await db.transaction(async (tx) => {
+    await tx.delete(recipeTags)
+      .where(and(eq(recipeTags.recipeId, recipeId), eq(recipeTags.source, 'extracted')))
+
+    if (enriched.tags.length > 0) {
+      await tx.insert(recipeTags).values(enriched.tags.map((t) => ({
+        recipeId,
+        facet: t.facet,
+        value: t.value,
+        source: 'extracted' as const,
+      }))).onConflictDoNothing()
+    }
+
+    // Position, not id: the ingredient rows already exist and only the parsed
+    // columns are being filled in. Matching on `(recipe_id, position)` — which
+    // is unique — means a mis-ordered response cannot write one line's quantity
+    // onto another's.
+    for (const line of enriched.ingredients) {
+      await tx.update(ingredients)
+        .set({
+          quantity: line.quantity,
+          unit: line.unit,
+          item: line.item,
+          note: line.note,
+        })
+        .where(and(eq(ingredients.recipeId, recipeId), eq(ingredients.position, line.position)))
+    }
+
+    await tx.update(recipes)
+      .set({ enrichmentApplied: true })
+      .where(eq(recipes.id, recipeId))
+  })
+}
