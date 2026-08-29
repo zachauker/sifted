@@ -70,7 +70,7 @@ export function NeedsAttentionTray({ jobs }: { jobs: Job[] }) {
 
   if (visible.length === 0) {
     return (
-      <p className="rounded border border-black/10 p-4 text-sm text-neutral-600 dark:border-white/10 dark:text-neutral-400">
+      <p className="rounded-lg border border-line bg-surface px-4 py-6 text-center text-sm text-ink-muted">
         Nothing needs attention.
       </p>
     )

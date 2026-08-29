@@ -34,19 +34,19 @@ export function TimeChip({
     // Inline, not flex: the separator is a text node with real spaces around
     // it, and a flex container would trim them and glue the two halves
     // together.
-    <p className="inline-block rounded-full bg-neutral-100 px-3 py-1 text-sm dark:bg-neutral-800">
+    <p className="font-num inline-block rounded-full bg-sunken px-3 py-1 text-sm tabular-nums">
       {claimedMinutes !== null && (
-        <span className="text-neutral-500 dark:text-neutral-400">
+        <span className="text-ink-muted">
           claims {formatMinutes(claimedMinutes)}
         </span>
       )}
       {claimedMinutes !== null && actualMinutes !== null && (
-        <span aria-hidden="true" className="text-neutral-400 dark:text-neutral-600">
+        <span aria-hidden="true" className="text-ink-faint">
           {' · '}
         </span>
       )}
       {actualMinutes !== null && (
-        <span className="font-medium">took us {formatMinutes(actualMinutes)}</span>
+        <span className="font-semibold text-ink">took us {formatMinutes(actualMinutes)}</span>
       )}
     </p>
   )

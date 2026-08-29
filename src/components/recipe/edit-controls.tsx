@@ -219,7 +219,7 @@ export function RecipeTimes({
     <div className="mt-4 flex flex-wrap items-center gap-2">
       <TimeChip claimedMinutes={claimedMinutes} actualMinutes={fields.actualTimeMinutes} />
       {servingsLabel && (
-        <p className="rounded-full bg-neutral-100 px-3 py-1 text-sm text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
+        <p className="rounded-full bg-sunken px-3 py-1 text-sm text-ink-muted">
           {servingsLabel}
         </p>
       )}
@@ -330,11 +330,11 @@ export function EditControls() {
   return (
     <section
       aria-labelledby="our-notes"
-      className="mt-10 rounded-xl bg-amber-50 p-4 dark:bg-amber-950/30"
+      className="mt-12 rounded-xl bg-accent-soft p-5"
     >
       <h2
         id="our-notes"
-        className="text-xs font-semibold tracking-wider text-amber-900/70 uppercase dark:text-amber-200/70"
+        className="text-sm font-semibold text-accent-on-soft"
       >
         Our notes
       </h2>
@@ -344,7 +344,7 @@ export function EditControls() {
         // rolled back, and it stays on screen until the next save succeeds.
         <p
           role="alert"
-          className="mt-3 rounded-lg bg-red-100 px-3 py-2 text-sm text-red-900 dark:bg-red-950/60 dark:text-red-200"
+          className="mt-3 rounded-lg bg-danger-soft px-3 py-2 text-sm font-medium text-danger"
         >
           {failure.message}
         </p>
@@ -352,7 +352,7 @@ export function EditControls() {
 
       <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-3">
         <div className="flex items-center gap-1">
-          <span className="mr-1 text-sm text-neutral-600 dark:text-neutral-300">Rating</span>
+          <span className="mr-1 text-sm font-medium text-ink">Rating</span>
           {/* No `role="group"` wrapper: `<details>` already exposes one for the
               narrative fold, and a second on this page makes "the group" an
               ambiguous thing to ask for. Each star carries its own label
@@ -375,10 +375,10 @@ export function EditControls() {
                   aria-pressed={fields.rating === value}
                   aria-label={ratingPhrase(value)}
                   onClick={() => chooseRating(value)}
-                  className={`flex min-h-11 min-w-11 items-center justify-center rounded text-xl leading-none outline-offset-2 focus-visible:outline-2 ${
+                  className={`flex min-h-11 min-w-11 items-center justify-center rounded-md text-xl leading-none transition-colors duration-(--dur-fast) ${
                     filled
-                      ? 'text-amber-500'
-                      : 'text-neutral-300 hover:text-amber-300 dark:text-neutral-600'
+                      ? 'text-accent-text'
+                      : 'text-ink-faint hover:text-accent-hover'
                   }`}
                 >
                   <span aria-hidden="true">★</span>
@@ -395,7 +395,7 @@ export function EditControls() {
             <button
               type="button"
               onClick={() => chooseRating(null)}
-              className="inline-flex min-h-11 items-center px-2 text-xs text-neutral-500 underline underline-offset-2 dark:text-neutral-400"
+              className="inline-flex min-h-11 items-center rounded-md px-2 text-xs font-medium text-accent-on-soft underline underline-offset-2"
             >
               Clear
             </button>
@@ -409,10 +409,10 @@ export function EditControls() {
               type="button"
               aria-pressed={fields.status === value}
               onClick={() => toggleStatus(value)}
-              className={`inline-flex min-h-11 items-center justify-center rounded-full px-4 text-sm ${
+              className={`inline-flex min-h-11 items-center justify-center rounded-full px-4 text-sm font-medium transition-colors duration-(--dur-fast) ease-(--ease-out-quart) ${
                 fields.status === value
-                  ? 'bg-neutral-800 text-white dark:bg-neutral-100 dark:text-neutral-900'
-                  : 'border border-black/15 text-neutral-600 dark:border-white/20 dark:text-neutral-300'
+                  ? 'bg-accent text-accent-ink'
+                  : 'border border-line bg-bg text-ink-muted hover:border-line-strong hover:text-ink'
               }`}
             >
               {STATUS_LABELS[value]}
@@ -433,7 +433,7 @@ export function EditControls() {
               to the chip at the top of the page, and two controls answering to
               it makes "what does the page say it took us" an ambiguous
               question for a screen reader and a test alike. */}
-          <label htmlFor="actual-time" className="text-sm text-neutral-600 dark:text-neutral-300">
+          <label htmlFor="actual-time" className="text-sm font-medium text-ink">
             How long it really took
           </label>
           <input
@@ -457,17 +457,17 @@ export function EditControls() {
             // phone, so leaving the page zoomed afterward is the worst
             // possible moment for it. `w-24` (not the original `w-20`)
             // gives the larger digits room without wrapping.
-            className="min-h-11 w-24 rounded-md border border-black/15 bg-white px-2 py-1 text-base sm:text-sm dark:border-white/20 dark:bg-neutral-900"
+            className="font-num min-h-11 w-24 rounded-md border border-line bg-bg px-2 text-base tabular-nums transition-colors duration-(--dur-fast) hover:border-line-strong sm:text-sm"
           />
-          <span className="text-sm text-neutral-600 dark:text-neutral-300">minutes</span>
+          <span className="text-sm text-ink-muted">minutes</span>
           <button
             type="submit"
-            className="min-h-11 rounded-md border border-black/15 px-4 text-sm dark:border-white/20"
+            className="min-h-11 rounded-md border border-line bg-bg px-4 text-sm font-medium transition-colors duration-(--dur-fast) ease-(--ease-out-quart) hover:bg-sunken"
           >
             Save
           </button>
           {timeUnsaved && (
-            <span className="text-xs text-amber-800 dark:text-amber-300">Not saved yet</span>
+            <span className="text-xs font-medium text-accent-on-soft">Not saved yet</span>
           )}
         </form>
       </div>
@@ -490,12 +490,12 @@ export function EditControls() {
             // opens, on the one field in the app most likely to be typed
             // one-handed. `sm:text-[15px]` keeps the original reading size
             // once the viewport is wide enough that focus doesn't zoom.
-            className="w-full rounded-lg border border-black/15 bg-white p-2 text-base leading-relaxed sm:text-[15px] dark:border-white/20 dark:bg-neutral-900"
+            className="w-full rounded-lg border border-line bg-bg p-3 text-base leading-relaxed transition-colors duration-(--dur-fast) hover:border-line-strong sm:text-sm"
           />
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <button
               type="submit"
-              className="min-h-11 rounded-md bg-neutral-800 px-4 text-sm text-white dark:bg-neutral-100 dark:text-neutral-900"
+              className="min-h-11 rounded-md bg-accent px-4 text-sm font-semibold text-accent-ink transition-colors duration-(--dur-fast) ease-(--ease-out-quart) hover:bg-accent-hover"
             >
               Save notes
             </button>
@@ -508,12 +508,12 @@ export function EditControls() {
                 setEditingNotes(false)
                 clearFailure()
               }}
-              className="inline-flex min-h-11 items-center px-2 text-sm text-neutral-500 underline underline-offset-2 dark:text-neutral-400"
+              className="inline-flex min-h-11 items-center rounded-md px-2 text-sm font-medium text-accent-on-soft underline underline-offset-2"
             >
               Cancel
             </button>
             {notesUnsaved && (
-              <span className="text-xs text-amber-800 dark:text-amber-300">Not saved yet</span>
+              <span className="text-xs font-medium text-accent-on-soft">Not saved yet</span>
             )}
           </div>
         </form>
@@ -524,7 +524,7 @@ export function EditControls() {
             // textarea, and the line breaks someone put in are meaningful.
             // Rendered as a text node — React escapes it, and notes never go
             // near `dangerouslySetInnerHTML` or a sanitizer.
-            <p className="text-[15px] leading-relaxed whitespace-pre-line">{fields.notes}</p>
+            <p className="max-w-prose text-base leading-relaxed whitespace-pre-line text-ink">{fields.notes}</p>
           )}
           <button
             type="button"
@@ -532,7 +532,7 @@ export function EditControls() {
               setNotesDraft(fields.notes ?? '')
               setEditingNotes(true)
             }}
-            className={`inline-flex min-h-11 items-center text-sm text-neutral-600 underline underline-offset-2 dark:text-neutral-300 ${
+            className={`inline-flex min-h-11 items-center rounded-md text-sm font-medium text-accent-on-soft underline underline-offset-2 ${
               fields.notes ? 'mt-2' : ''
             }`}
           >

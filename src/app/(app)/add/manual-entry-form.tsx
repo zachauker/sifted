@@ -78,7 +78,7 @@ export function ManualEntryForm() {
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           disabled={busy}
-          className="w-full rounded border border-black/20 bg-transparent px-3 py-2 text-sm disabled:opacity-50 dark:border-white/20"
+          className="min-h-11 w-full rounded-md border border-line bg-bg px-3 text-base transition-colors duration-(--dur-fast) hover:border-line-strong disabled:opacity-50 sm:text-sm"
         />
       </div>
 
@@ -86,7 +86,7 @@ export function ManualEntryForm() {
         <label htmlFor="manual-ingredients" className="mb-1 block text-sm font-medium">
           Ingredients
         </label>
-        <p className="mb-1 text-xs text-neutral-500 dark:text-neutral-400">
+        <p className="mb-1 text-xs text-ink-muted">
           One per line, saved exactly as typed.
         </p>
         <textarea
@@ -95,7 +95,7 @@ export function ManualEntryForm() {
           value={ingredients}
           onChange={(e) => setIngredients(e.target.value)}
           disabled={busy}
-          className="w-full rounded border border-black/20 bg-transparent px-3 py-2 font-mono text-sm disabled:opacity-50 dark:border-white/20"
+          className="w-full rounded-md border border-line bg-bg p-3 font-mono text-base leading-relaxed transition-colors duration-(--dur-fast) hover:border-line-strong disabled:opacity-50 sm:text-sm"
         />
       </div>
 
@@ -103,14 +103,14 @@ export function ManualEntryForm() {
         <label htmlFor="manual-steps" className="mb-1 block text-sm font-medium">
           Steps
         </label>
-        <p className="mb-1 text-xs text-neutral-500 dark:text-neutral-400">One per line.</p>
+        <p className="mb-1 text-xs text-ink-muted">One per line.</p>
         <textarea
           id="manual-steps"
           rows={8}
           value={steps}
           onChange={(e) => setSteps(e.target.value)}
           disabled={busy}
-          className="w-full rounded border border-black/20 bg-transparent px-3 py-2 text-sm disabled:opacity-50 dark:border-white/20"
+          className="min-h-11 w-full rounded-md border border-line bg-bg px-3 text-base transition-colors duration-(--dur-fast) hover:border-line-strong disabled:opacity-50 sm:text-sm"
         />
       </div>
 
@@ -127,7 +127,7 @@ export function ManualEntryForm() {
             value={claimedTimeMinutes}
             onChange={(e) => setClaimedTimeMinutes(e.target.value)}
             disabled={busy}
-            className="w-28 rounded border border-black/20 bg-transparent px-3 py-2 text-sm disabled:opacity-50 dark:border-white/20"
+            className="font-num min-h-11 w-28 rounded-md border border-line bg-bg px-3 text-base tabular-nums transition-colors duration-(--dur-fast) hover:border-line-strong disabled:opacity-50 sm:text-sm"
           />
         </div>
         <div>
@@ -142,7 +142,7 @@ export function ManualEntryForm() {
             value={servings}
             onChange={(e) => setServings(e.target.value)}
             disabled={busy}
-            className="w-28 rounded border border-black/20 bg-transparent px-3 py-2 text-sm disabled:opacity-50 dark:border-white/20"
+            className="font-num min-h-11 w-28 rounded-md border border-line bg-bg px-3 text-base tabular-nums transition-colors duration-(--dur-fast) hover:border-line-strong disabled:opacity-50 sm:text-sm"
           />
         </div>
       </div>
@@ -151,14 +151,14 @@ export function ManualEntryForm() {
         <button
           type="submit"
           disabled={busy}
-          className="rounded border border-black/20 px-3 py-2 text-sm font-medium disabled:opacity-50 dark:border-white/20"
+          className="min-h-11 rounded-md bg-accent px-4 text-sm font-semibold text-accent-ink transition-colors duration-(--dur-fast) ease-(--ease-out-quart) hover:bg-accent-hover disabled:opacity-50 disabled:hover:bg-accent"
         >
           {busy ? 'Saving…' : 'Save recipe'}
         </button>
       </div>
 
       {state.kind === 'error' && (
-        <p role="alert" className="text-sm text-red-700 dark:text-red-400">
+        <p role="alert" className="text-sm text-danger">
           {state.message}
         </p>
       )}

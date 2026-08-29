@@ -30,7 +30,7 @@ export default async function EditRecipePage({ params }: { params: Promise<{ slu
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-8">
       <h1 className="text-xl font-semibold sm:text-2xl">Edit “{recipe.title}”</h1>
-      <p className="mt-1 mb-6 text-sm text-neutral-500 dark:text-neutral-400">
+      <p className="mt-1 mb-6 text-sm text-ink-muted">
         Your rating, notes, and how long it really took are edited on the recipe itself and are not
         touched here.
       </p>

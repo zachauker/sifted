@@ -62,17 +62,17 @@ export function NarrativeFold({
     // `group` so the marker below can react to this element's own `open`
     // state via `group-open:` — the state lives on `<details>`, not on the
     // `<summary>` or the marker span inside it.
-    <details className="group mt-10 border-t border-black/10 pt-4 dark:border-white/10">
+    <details className="group mt-12 border-t border-line pt-4">
       {/* `min-h-11`: the whole disclosure trigger, not just its text, is
           what a tap has to land on. */}
-      <summary className="flex min-h-11 cursor-pointer list-none items-center gap-1 text-sm text-neutral-500 hover:text-neutral-800 dark:text-neutral-400 dark:hover:text-neutral-200">
+      <summary className="flex min-h-11 cursor-pointer list-none items-center gap-1.5 rounded-md text-sm text-ink-muted transition-colors duration-(--dur-fast) hover:text-ink">
         {/* Killing the native marker (`list-none`) and drawing this one
             instead only pays for itself if it actually indicates open vs.
             closed — `group-open:rotate-90` is that rule; without it the
             triangle just sits there, permanently pointing at nothing in
             particular. */}
         <span
-          className="inline-block transition-transform group-open:rotate-90"
+          className="inline-block transition-transform duration-(--dur-base) ease-(--ease-out-quart) group-open:rotate-90"
           aria-hidden="true"
         >
           ▸
@@ -80,7 +80,7 @@ export function NarrativeFold({
         {label} — {describeWordCount(words)}
       </summary>
       <div
-        className="prose mt-4 max-w-prose text-sm leading-relaxed text-neutral-600 [&_a]:underline [&_blockquote]:border-l-2 [&_blockquote]:pl-3 [&_h2]:mt-6 [&_h2]:font-medium [&_h3]:mt-6 [&_h3]:font-medium [&_img]:my-4 [&_img]:max-w-full [&_li]:my-1 [&_ol]:my-3 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-3 [&_ul]:my-3 [&_ul]:list-disc [&_ul]:pl-5 dark:text-neutral-400"
+        className="prose mt-4 max-w-prose text-sm leading-relaxed text-ink-muted [&_a]:underline [&_blockquote]:border-l-2 [&_blockquote]:border-line-strong [&_blockquote]:pl-3 [&_h2]:mt-6 [&_h2]:font-medium [&_h3]:mt-6 [&_h3]:font-medium [&_img]:my-4 [&_img]:max-w-full [&_img]:rounded-lg [&_li]:my-1 [&_ol]:my-3 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-3 [&_ul]:my-3 [&_ul]:list-disc [&_ul]:pl-5"
         dangerouslySetInnerHTML={{ __html: clean }}
       />
     </details>

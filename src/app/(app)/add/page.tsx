@@ -14,7 +14,7 @@ export default function AddRecipePage() {
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-10 px-4 py-6">
       <div>
         <h1 className="mb-1 text-xl font-semibold">Add a recipe</h1>
-        <p className="text-sm text-neutral-500 dark:text-neutral-400">
+        <p className="text-sm text-ink-muted">
           Paste a link, or type one in by hand.
         </p>
       </div>
@@ -30,7 +30,7 @@ export default function AddRecipePage() {
         <h2 id="add-by-hand-heading" className="mb-2 text-base font-medium">
           Enter one by hand
         </h2>
-        <p className="mb-3 text-sm text-neutral-500 dark:text-neutral-400">
+        <p className="mb-3 text-sm text-ink-muted">
           For a recipe with no web source — a family recipe, something typed
           up from memory. Ingredients are saved exactly as typed, one per
           line.
