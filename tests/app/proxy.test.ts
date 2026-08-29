@@ -54,6 +54,12 @@ describe('middleware matcher (the actual `config.matcher` the middleware runs, n
   it.each([
     ['/api/import', false],
     ['/api/auth/session', false],
+    // The health check reports whether this deployment can load jsdom at
+    // all. It has to be readable without a session: the failure it exists
+    // to report takes down every route that extracts, and a check you can
+    // only reach by signing in is no use when you are trying to find out
+    // whether anyone can use the app.
+    ['/api/health', false],
     ['/api/auth/callback/credentials', false],
     ['/_next/static/chunks/main.js', false],
     ['/_next/image', false],

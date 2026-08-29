@@ -61,6 +61,6 @@ export default auth(decide)
  */
 export const config = {
   matcher: [
-    '/((?!api/auth|api/import|_next/static|_next/image|favicon.ico|manifest.json|icon.svg|icon-192.png|icon-512.png|apple-touch-icon.png).*)',
+    '/((?!api/auth|api/import|api/health|_next/static|_next/image|favicon.ico|manifest.json|icon.svg|icon-192.png|icon-512.png|apple-touch-icon.png).*)',
   ],
 }
