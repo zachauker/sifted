@@ -97,6 +97,14 @@ or paste them in **Settings → Environment Variables**. Then:
 npx vercel --prod
 ```
 
+**Node version.** `package.json` pins `engines.node` to `24.x`, which
+overrides whatever the project settings say. This is load-bearing rather than
+tidy: `jsdom` reaches a CommonJS package that `require()`s an ES-module-only
+dependency, which Node could not do before 22.12. On an older runtime every
+route that extracts a recipe — the phone Shortcut and the paste-HTML recovery
+both — returns 500. If you change this, `tests/build/node-engines-guard.test.ts`
+will tell you why not.
+
 **Check the function duration limit.** All three import routes export
 `maxDuration = 60`, derived from the budgets they can actually spend: 20s fetch
 + 25s extraction + 15s image ingestion. If your plan caps functions below 60
@@ -222,3 +230,4 @@ Vercel and does not off it. Without it every request bounces to `/login`.
 | Imports fail with `ANTHROPIC_API_KEY is not set` | Not added to the Vercel environment, or added without redeploying |
 | Imports die around 60 seconds | The function duration limit is below `maxDuration = 60`. See step 5 |
 | The filter rail is empty | The migration ran without enrichment. `npm run unenriched` |
+| Every import or retry returns 500, with `ERR_REQUIRE_ESM` / `Failed to load external module jsdom` in the runtime logs | The function is running Node older than 22.12. `engines.node` in `package.json` pins this to `24.x` — redeploy so the setting takes effect |
