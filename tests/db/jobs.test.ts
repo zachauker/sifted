@@ -254,14 +254,15 @@ describe('needs-attention excludes failures that were later recovered', () => {
     expect(await listJobsNeedingAttention(db)).toHaveLength(1)
   })
 
-  it('hides every stale attempt at the same URL, not just the newest', async () => {
+  it('hides a URL that was retried many times before it succeeded', async () => {
     const { countJobsNeedingAttention } = await import('@/lib/db/queries/jobs')
     const url = 'https://example.com/retried-a-lot'
     for (let i = 0; i < 5; i++) {
       const id = await createJob(db, url)
       await markFailed(db, id, 'blocked', new Error('403'))
     }
-    expect(await countJobsNeedingAttention(db)).toBe(5)
+    // Five attempts, one problem — see the per-URL collapse below.
+    expect(await countJobsNeedingAttention(db)).toBe(1)
 
     await storeRecipe(url)
     expect(await countJobsNeedingAttention(db)).toBe(0)
@@ -277,5 +278,32 @@ describe('needs-attention excludes failures that were later recovered', () => {
     await markFailed(db, stillBroken, 'no_recipe', new Error('nothing there'))
 
     expect(await countJobsNeedingAttention(db)).toBe((await listJobsNeedingAttention(db)).length)
+  })
+})
+
+describe('needs-attention shows one row per URL, not one per attempt', () => {
+  it('keeps only the newest attempt at the same URL', async () => {
+    const { countJobsNeedingAttention } = await import('@/lib/db/queries/jobs')
+    const url = 'https://example.com/keeps-failing'
+    const ids: string[] = []
+    for (let i = 0; i < 4; i++) {
+      const id = await createJob(db, url)
+      await markFailed(db, id, 'blocked', new Error(`attempt ${i}`))
+      ids.push(id)
+    }
+
+    const rows = await listJobsNeedingAttention(db)
+    expect(rows).toHaveLength(1)
+    expect(rows[0].id).toBe(ids.at(-1))
+    expect(await countJobsNeedingAttention(db)).toBe(1)
+  })
+
+  it('still lists distinct URLs separately', async () => {
+    const { countJobsNeedingAttention } = await import('@/lib/db/queries/jobs')
+    for (const u of ['https://example.com/one', 'https://example.com/two']) {
+      const id = await createJob(db, u)
+      await markFailed(db, id, 'blocked', new Error('403'))
+    }
+    expect(await countJobsNeedingAttention(db)).toBe(2)
   })
 })

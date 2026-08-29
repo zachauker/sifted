@@ -198,6 +198,19 @@ export async function listJobsNeedingAttention(db: Db, limit?: number) {
     .where(and(
       inArray(importJobs.status, ['failed', 'running', 'queued']),
       sql`not exists (select 1 from ${recipes} where ${recipes.sourceUrl} = ${importJobs.url})`,
+      // One URL is one problem. Retrying is how a failure gets fixed, so
+      // counting every attempt means the tray grows as you work through it and
+      // shows the same page several times over — fix it once and the older
+      // rows still sit there looking outstanding. Only the newest attempt at a
+      // URL is the live one; the tie-break matches the ordering below so that
+      // two attempts recorded in the same second still resolve to exactly one.
+      sql`not exists (
+        select 1 from ${importJobs} newer
+        where newer.url = ${importJobs.url}
+          and newer.status in ('failed', 'running', 'queued')
+          and (newer.created_at > ${importJobs.createdAt}
+               or (newer.created_at = ${importJobs.createdAt} and newer.rowid > ${importJobs}.rowid))
+      )`,
     ))
     .orderBy(desc(importJobs.createdAt), sql`${importJobs}.rowid desc`)
   return limit === undefined ? base : base.limit(limit)
@@ -231,6 +244,19 @@ export async function countJobsNeedingAttention(db: Db): Promise<number> {
     .where(and(
       inArray(importJobs.status, ['failed', 'running', 'queued']),
       sql`not exists (select 1 from ${recipes} where ${recipes.sourceUrl} = ${importJobs.url})`,
+      // One URL is one problem. Retrying is how a failure gets fixed, so
+      // counting every attempt means the tray grows as you work through it and
+      // shows the same page several times over — fix it once and the older
+      // rows still sit there looking outstanding. Only the newest attempt at a
+      // URL is the live one; the tie-break matches the ordering below so that
+      // two attempts recorded in the same second still resolve to exactly one.
+      sql`not exists (
+        select 1 from ${importJobs} newer
+        where newer.url = ${importJobs.url}
+          and newer.status in ('failed', 'running', 'queued')
+          and (newer.created_at > ${importJobs.createdAt}
+               or (newer.created_at = ${importJobs.createdAt} and newer.rowid > ${importJobs}.rowid))
+      )`,
     ))
   return row?.count ?? 0
 }
