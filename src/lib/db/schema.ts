@@ -63,6 +63,12 @@ export const recipes = sqliteTable('recipes', {
   }).notNull(),
   enrichmentApplied: integer('enrichment_applied', { mode: 'boolean' }).notNull().default(false),
 
+  // True once a person has edited this recipe's own words through the editor.
+  // Re-import still replaces content wholesale (see `upsertRecipe`); this is
+  // what lets the UI warn before that happens, and what the recipe page reads
+  // to show its "edited by hand" marker.
+  handEdited: integer('hand_edited', { mode: 'boolean' }).notNull().default(false),
+
   addedBy: text('added_by').references(() => users.id),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),

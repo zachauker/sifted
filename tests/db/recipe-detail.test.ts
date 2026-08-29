@@ -267,4 +267,20 @@ describe('getRecipeBySlug', () => {
     expect(detail?.steps.map((s) => s.text)).toEqual(['mine only'])
     expect(detail?.tags).toEqual([{ facet: 'course', value: 'main' }])
   })
+
+  it('reports a machine-written recipe as not hand-edited', async () => {
+    await insertRecipe({ slug: 'untouched' })
+
+    const detail = await getRecipeBySlug(db, 'untouched')
+
+    expect(detail?.handEdited).toBe(false)
+  })
+
+  it('reports a hand-edited recipe as hand-edited', async () => {
+    await insertRecipe({ slug: 'corrected', handEdited: true })
+
+    const detail = await getRecipeBySlug(db, 'corrected')
+
+    expect(detail?.handEdited).toBe(true)
+  })
 })

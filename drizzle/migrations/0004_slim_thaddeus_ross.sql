@@ -1,0 +1,1 @@
+ALTER TABLE `recipes` ADD `hand_edited` integer DEFAULT false NOT NULL;

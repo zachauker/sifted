@@ -31,6 +31,7 @@ export type RecipeDetail = {
   notes: string | null
   narrativeHtml: string | null
   extractionMethod: 'jsonld' | 'microdata' | 'llm' | 'notion' | 'manual'
+  handEdited: boolean
   createdAt: Date
   ingredients: DetailIngredient[]
   steps: DetailStep[]
@@ -131,6 +132,7 @@ export async function getRecipeBySlug(db: Db, slug: string): Promise<RecipeDetai
       notes: recipes.notes,
       narrativeHtml: recipes.narrativeHtml,
       extractionMethod: recipes.extractionMethod,
+      handEdited: recipes.handEdited,
       createdAt: recipes.createdAt,
     })
     .from(recipes)

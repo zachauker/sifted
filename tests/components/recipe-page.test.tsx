@@ -74,6 +74,7 @@ function recipe(overrides: Partial<RecipeDetail> = {}): RecipeDetail {
     notes: null,
     narrativeHtml: null,
     extractionMethod: 'jsonld',
+    handEdited: false,
     createdAt: new Date('2024-01-01T00:00:00Z'),
     ingredients: [],
     steps: [],
