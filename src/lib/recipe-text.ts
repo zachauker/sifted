@@ -45,20 +45,37 @@ function headerLabel(line: string): string | null {
 }
 
 /**
- * Lines with the section each one belongs to. Header lines are consumed, never
- * stored — a header is the `section` value on the rows beneath it.
+ * Lines with the section each one belongs to. A header line is consumed, never
+ * stored, only when at least one row ends up beneath it — a header is the
+ * `section` value on those rows. A header-shaped line with nothing beneath it
+ * (the last line in the text, or immediately followed by another header) is
+ * not treated as a header at all: it is stored as an ordinary line, carrying
+ * whatever section was already in effect.
  *
- * A real ingredient ending in a colon would be misread as a header. That
- * string does not occur in practice, and an escape syntax is one more thing to
- * remember for a case that never happens.
+ * No line's text may be silently discarded — that is the rule, full stop. A
+ * hand-typed ingredient ending in a colon is not the reason: nobody types
+ * that. The population this format actually meets is extractor output, and
+ * `src/lib/extract/index.ts` stores every extracted ingredient with
+ * `section: null`, so a source that spells its sections as pseudo-ingredient
+ * rows ("For the sauce:", "Optional toppings:") already has those rows in
+ * this library as ordinary ingredient rows. One in the middle of the list
+ * converts harmlessly into a real heading; one at the end — or immediately
+ * followed by another such row — has no rows to attach to, and treating it as
+ * a header would delete it on the next save with no error and no trace. This
+ * function requires a lookahead of exactly one line to tell the two cases
+ * apart.
  */
 export function parseSectionedLines(raw: string | null | undefined): SectionedLine[] {
   const out: SectionedLine[] = []
+  const lines = parseLines(raw)
   let section: string | null = null
 
-  for (const line of parseLines(raw)) {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
     const label = headerLabel(line)
-    if (label !== null) {
+    // A header only counts as a header if a next line exists and is not
+    // itself a header — i.e. at least one row will land beneath it.
+    if (label !== null && i + 1 < lines.length && headerLabel(lines[i + 1]) === null) {
       section = label
       continue
     }

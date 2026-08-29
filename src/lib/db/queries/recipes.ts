@@ -7,12 +7,16 @@ import type { TagAssignment } from '@/lib/taxonomy'
 import type { SectionedLine } from '@/lib/recipe-text'
 
 /**
- * The single write path for a recipe.
- *
- * Everything that stores a recipe goes through `upsertRecipe`. There are no SQL
- * triggers keeping `recipes_fts` in step with the base tables by design: one
- * function means one explicit, testable sync point, and a trigger that silently
- * stops firing is far harder to notice than a function that fails a test.
+ * Two write paths for a recipe, by design: `upsertRecipe` for machine
+ * extraction, keyed on `sourceUrl` dedupe and free to overwrite every
+ * source-derived column because a fresh extraction is by definition a better
+ * read of the same page; `updateRecipeContent` for a hand edit, which writes
+ * exactly what a person typed and nothing it cannot justify. What keeps "one
+ * place knows how the search index is written" true in substance, with two
+ * writers, is `syncFtsRow` — both paths call it, and there are still
+ * deliberately no SQL triggers keeping `recipes_fts` in step with the base
+ * tables: a trigger that silently stops firing is far harder to notice than a
+ * function that fails a test.
  */
 
 export type UpsertInput = {
@@ -608,7 +612,7 @@ export async function updateRecipeContent(
           value: tag.value,
           source: 'user' as const,
         })),
-      )
+      ).onConflictDoNothing()
     }
 
     // `notes` carried from the stored row and `narrative` recomputed from the

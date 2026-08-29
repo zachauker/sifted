@@ -256,6 +256,25 @@ describe('upsertRecipe', () => {
     expect(row.createdAt.toISOString()).toBe(createdAt.toISOString())
   })
 
+  it('does not clear handEdited on a re-import', async () => {
+    // The whole "mark, then warn" design rests on this flag surviving a
+    // re-import: `updateRecipeContent` sets `handEdited`, and a later warning
+    // reads it before a re-import replaces a hand-edited recipe's content.
+    // `sourceFields` sits directly above `hand_edited` in the schema and its
+    // comment reads "everything here is by definition a better read of the
+    // same source" — a contributor adding `handEdited: false` to it would be
+    // reasoning plausibly, and would silently disarm the warning for every
+    // recipe in the library.
+    const url = 'https://x.com/hand-edited'
+    const id = await upsertRecipe(db, { extracted, sourceUrl: url, sourceDomain: 'x.com' })
+    await db.update(recipes).set({ handEdited: true }).where(eq(recipes.id, id))
+
+    await upsertRecipe(db, { extracted, sourceUrl: url, sourceDomain: 'x.com' })
+
+    const [row] = await db.select().from(recipes).where(eq(recipes.id, id))
+    expect(row.handEdited).toBe(true)
+  })
+
   it('still defaults createdAt to now when none is supplied', async () => {
     const before = Date.now()
     const id = await upsertRecipe(db, {

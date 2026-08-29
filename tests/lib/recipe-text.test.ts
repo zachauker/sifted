@@ -52,6 +52,30 @@ describe('parseSectionedLines', () => {
   it('treats a bare colon as an ordinary line, not an empty section', () => {
     expect(parseSectionedLines(':')).toEqual([{ section: null, text: ':' }])
   })
+
+  it('keeps a trailing header-shaped line as content instead of discarding it', () => {
+    // No rows survive beneath it, so under the no-silent-discard rule it is not
+    // a header — it is the last ordinary line, carrying whatever section was in
+    // effect at that point (none, here).
+    expect(parseSectionedLines('2 eggs\nOptional toppings:')).toEqual([
+      { section: null, text: '2 eggs' },
+      { section: null, text: 'Optional toppings:' },
+    ])
+  })
+
+  it('keeps the first of two consecutive header lines as content, since nothing sits beneath it', () => {
+    const lines = parseSectionedLines('For the sauce:\nFor the chicken:\n1 chicken')
+    expect(lines).toEqual([
+      { section: null, text: 'For the sauce:' },
+      { section: 'For the chicken', text: '1 chicken' },
+    ])
+  })
+
+  it('still turns a header with rows beneath it into a section, unaffected by the no-discard rule', () => {
+    expect(parseSectionedLines('For the sauce:\ngochujang')).toEqual([
+      { section: 'For the sauce', text: 'gochujang' },
+    ])
+  })
 })
 
 describe('renderSectionedLines', () => {
