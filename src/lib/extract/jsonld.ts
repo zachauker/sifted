@@ -1,8 +1,8 @@
-import { JSDOM } from 'jsdom'
 import { normalizeTags } from '@/lib/taxonomy'
 import { parseServingsText, resolveClaimedTimeMinutes, splitCommaSeparated } from './schema-fields'
 import type { JsonLdNode } from './jsonld-find'
 import type { ExtractedIngredient, ExtractedStep, PartialRecipe } from './types'
+import { parseDocument } from './dom'
 
 // A realistic recipe calls plainText() ~28 times (title, description, author,
 // publisher, yield, every ingredient line, every step) and each call used to
@@ -15,7 +15,7 @@ import type { ExtractedIngredient, ExtractedStep, PartialRecipe } from './types'
 // input can survive into the next call's output, even for malformed markup
 // like an unclosed tag. Scripts never execute — `runScripts` is not passed
 // to JSDOM, so <script> tags are inert.
-const scratchElement = new JSDOM('').window.document.createElement('div')
+const scratchElement = parseDocument('').createElement('div')
 
 /** Strips markup and decodes entities from a schema.org text field. */
 function plainText(value: unknown): string {

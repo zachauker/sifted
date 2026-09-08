@@ -1,5 +1,5 @@
-import { JSDOM } from 'jsdom'
 import { Readability } from '@mozilla/readability'
+import { parseDocument, parseFragment } from './dom'
 
 /**
  * Selectors used by the common recipe-card plugins. These are removed *before*
@@ -212,8 +212,7 @@ export function extractNarrative(
   recipeBody?: RecipeBodyText,
   sourceUrl = 'https://example.com/',
 ): string | null {
-  const dom = new JSDOM(html, { url: sourceUrl })
-  const { document } = dom.window
+  const document = parseDocument(html, sourceUrl)
 
   // Measured once, before any removals, so removing one card doesn't shift the
   // denominator used to judge the next.
@@ -235,7 +234,7 @@ export function extractNarrative(
 
   // Re-parsed so the de-duplication below works on the DOM Readability actually
   // chose, rather than on the whole page.
-  const root = new JSDOM(content).window.document.body
+  const root = parseFragment(content)
   if (!root) return null
 
   removeDuplicatedBlocks(root, recipeLines(recipeBody))

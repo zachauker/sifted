@@ -97,13 +97,12 @@ or paste them in **Settings → Environment Variables**. Then:
 npx vercel --prod
 ```
 
-**Node version.** `package.json` pins `engines.node` to `24.x`, which
-overrides whatever the project settings say. This is load-bearing rather than
-tidy: `jsdom` reaches a CommonJS package that `require()`s an ES-module-only
-dependency, which Node could not do before 22.12. On an older runtime every
-route that extracts a recipe — the phone Shortcut and the paste-HTML recovery
-both — returns 500. If you change this, `tests/build/node-engines-guard.test.ts`
-will tell you why not.
+**Node version.** `package.json` pins `engines.node` to `24.x`. Note that this
+is *not* what makes extraction work: Vercel's runtime starts functions with
+`--no-experimental-require-module` regardless of version, so `require()` of an
+ES module throws there no matter how new Node is. That is why the DOM parser is
+linkedom rather than jsdom. `/api/health` reports the flag and whether parsing
+actually works.
 
 **Check the function duration limit.** All three import routes export
 `maxDuration = 60`, derived from the budgets they can actually spend: 20s fetch
@@ -230,7 +229,7 @@ Vercel and does not off it. Without it every request bounces to `/login`.
 | Imports fail with `ANTHROPIC_API_KEY is not set` | Not added to the Vercel environment, or added without redeploying |
 | Imports die around 60 seconds | The function duration limit is below `maxDuration = 60`. See step 5 |
 | The filter rail is empty | The migration ran without enrichment. `npm run unenriched` |
-| Imports and retries return 500 | Check `/api/health`. If `requireModule` is false, the runtime cannot load jsdom — import from your machine with `npm run import` until that is fixed |
+| Imports and retries return 500 (on a phone: "the network connection was lost") | Check `/api/health`. `status: ok` means extraction works. If it is `degraded`, the DOM parser failed to load and every extracting route dies before its handler runs; `npm run import` from your machine works meanwhile |
 | A recipe has no tags and its page cannot be fetched | `npm run import -- --enrich-only` — re-runs enrichment against what is already stored, no network needed |
 | Recipe cards show no image, but the import said it worked | `npm run images -- --repair-urls` — the blob is there, only its URL was lost |
 | A recipe genuinely has no picture | `npm run images -- --missing` reads it back out of the archived page; `--recipe=<slug> --from=<url>` attaches one by hand |

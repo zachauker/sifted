@@ -1,7 +1,7 @@
-import { JSDOM } from 'jsdom'
 import { normalizeTags } from '@/lib/taxonomy'
 import { parseServingsText, resolveClaimedTimeMinutes, splitCommaSeparated } from './schema-fields'
 import type { PartialRecipe } from './types'
+import { parseDocument } from './dom'
 
 /**
  * Properties whose microdata value is a human-readable label rather than a
@@ -164,8 +164,8 @@ function findRecipeScope(doc: Document): Element | null {
  * can fall through to the LLM path.
  */
 export function fromMicrodata(html: string): PartialRecipe | null {
-  const { window } = new JSDOM(html)
-  const scope = findRecipeScope(window.document)
+  const document = parseDocument(html)
+  const scope = findRecipeScope(document)
   if (!scope) return null
 
   const title = one(scope, 'name')

@@ -1,4 +1,4 @@
-import { JSDOM } from 'jsdom'
+import { parseDocument } from './dom'
 
 /**
  * The hero image a page advertises to link previews.
@@ -33,7 +33,7 @@ const SELECTORS = [
 export function findOgImage(html: string, baseUrl: string): string | null {
   let doc: Document
   try {
-    doc = new JSDOM(html, { url: baseUrl }).window.document
+    doc = parseDocument(html, baseUrl)
   } catch {
     return null
   }

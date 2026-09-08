@@ -1,4 +1,4 @@
-import { JSDOM } from 'jsdom'
+import { parseDocument } from './dom'
 
 export type JsonLdNode = Record<string, unknown> & { name?: string }
 
@@ -78,8 +78,7 @@ function unwrapScriptBody(raw: string): string {
  * one broken block and one good one is common.
  */
 export function findRecipeNode(html: string): JsonLdNode | null {
-  const { window } = new JSDOM(html)
-  const scripts = window.document.querySelectorAll('script[type="application/ld+json"]')
+  const scripts = parseDocument(html).querySelectorAll('script[type="application/ld+json"]')
 
   for (const script of scripts) {
     let parsed: unknown

@@ -4,43 +4,52 @@ import { NextResponse } from 'next/server'
  * Whether this deployment can actually extract a recipe.
  *
  * Every extraction path — `/api/import` from the phone Shortcut, and the
- * paste-HTML retry for a blocked publisher — goes through `jsdom`, and jsdom
- * is loaded as an *external* CommonJS module at the top of those route
- * modules. When it cannot load, the module never evaluates, so the failure
+ * paste-HTML retry for a blocked publisher — needs to turn HTML into a DOM.
+ * That parser is loaded as an *external* module at the top of those route
+ * modules, so when it cannot load the module never evaluates and the failure
  * lands before any handler code runs: a bare 500 with no job row, no logged
- * reason, and nothing in the needs-attention tray. The app looks like it is
- * up. Every save silently fails.
+ * reason, and nothing in the needs-attention tray. The app looks up while
+ * every save silently fails — and on a phone it surfaces only as "the network
+ * connection was lost", which says nothing about where to look.
  *
- * That has now happened in production, from a dependency the app does not
- * name and did not change: jsdom reaches a CommonJS package that
- * `require()`s an ES-module-only one, which only works on Node 22.12+.
+ * That has happened in production, from a dependency the app does not name and
+ * did not change: jsdom reached a CommonJS package that `require()`s an
+ * ES-module-only one, which Vercel's runtime forbids. `parseDocument` uses
+ * linkedom now for exactly that reason, and this route is what proves it —
+ * `requireModule` below is still false in production, so the constraint has
+ * not gone away, only stopped mattering.
  *
- * So this route deliberately imports nothing heavy at module scope, and
- * pulls jsdom in dynamically inside the handler — it has to survive exactly
- * the failure it is here to report. `process.features.require_module` is the
- * flag that decides whether that require can work at all, which makes it the
- * single most useful number to be able to read from outside.
+ * It imports nothing heavy at module scope and pulls the parser in inside the
+ * handler, because it has to survive exactly the failure it exists to report.
  *
  * Unauthenticated on purpose (see the matcher in `src/proxy.ts`): a health
- * check that needs a session cannot be read when the thing you are checking
- * is whether anyone can use the app. It discloses a Node version and a
- * boolean, and nothing about the library.
+ * check that needs a session cannot be read when the thing you are checking is
+ * whether anyone can use the app. It discloses a Node version and a boolean,
+ * and nothing about the library.
  */
 export const dynamic = 'force-dynamic'
 
 export async function GET() {
-  let jsdom: string
+  // Exercises the DOM parser through the same module the extractor uses, and
+  // actually parses something rather than only importing it. Probing `jsdom`
+  // by name was right when jsdom was the parser; it is wrong now that jsdom is
+  // only a test dependency — it would report this route degraded forever while
+  // every import worked fine, which is a worse failure than saying nothing.
+  let extraction: string
   try {
-    await import('jsdom')
-    jsdom = 'ok'
+    const { parseDocument } = await import('@/lib/extract/dom')
+    const doc = parseDocument('<html><body><h1>ok</h1></body></html>')
+    extraction = doc.querySelector('h1')?.textContent === 'ok'
+      ? 'ok'
+      : 'the DOM parser loaded but did not parse'
   } catch (error) {
-    jsdom =
+    extraction =
       error instanceof Error
         ? `${(error as NodeJS.ErrnoException).code ?? error.name}: ${error.message.split('\n')[0]}`
         : String(error)
   }
 
-  const healthy = jsdom === 'ok'
+  const healthy = extraction === 'ok'
 
   return NextResponse.json(
     {
@@ -55,7 +64,7 @@ export async function GET() {
       // it; if it shows up only in nodeOptions, setting NODE_OPTIONS can.
       execArgv: process.execArgv,
       nodeOptions: process.env.NODE_OPTIONS ?? null,
-      extraction: jsdom,
+      extraction,
     },
     { status: healthy ? 200 : 503 },
   )

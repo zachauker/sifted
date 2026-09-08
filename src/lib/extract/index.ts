@@ -1,4 +1,3 @@
-import { JSDOM } from 'jsdom'
 import { applyEnrichment } from './enrich'
 import { fromJsonLd } from './jsonld'
 import { findRecipeNode } from './jsonld-find'
@@ -6,6 +5,7 @@ import { fromMicrodata } from './microdata'
 import { llmRecipeSchema, type LlmClient } from './llm-types'
 import { extractNarrative } from './narrative'
 import type { ExtractedRecipe, PartialRecipe } from './types'
+import { parseDocument } from './dom'
 
 export class NoRecipeFoundError extends Error {
   constructor(url: string) {
@@ -45,9 +45,9 @@ export type ExtractInput = {
 }
 
 function pageText(html: string): string {
-  const { window } = new JSDOM(html)
-  for (const el of window.document.querySelectorAll('script, style, nav, footer')) el.remove()
-  return (window.document.body?.textContent ?? '').replace(/\s+/g, ' ').trim()
+  const document = parseDocument(html)
+  for (const el of document.querySelectorAll('script, style, nav, footer')) el.remove()
+  return (document.body?.textContent ?? '').replace(/\s+/g, ' ').trim()
 }
 
 /**
