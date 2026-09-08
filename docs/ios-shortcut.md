@@ -23,6 +23,14 @@ Then, on the phone:
    for photos and text, where it would just be noise.
 4. Add a **Get Contents of URL** action:
    - **URL:** `https://<your-app-domain>/api/import`
+
+   **Use the production domain, not a deployment or branch alias.** Vercel
+   protects `<project>-<team>.vercel.app` and `<project>-git-<branch>-<team>.vercel.app`
+   with its own authentication, which blocks the request at the edge before any
+   of this app's code runs. A browser gets bounced to a Vercel login page; a
+   Shortcut has nowhere to go and sits on "Running" forever, with nothing in the
+   app's logs to show the request ever arrived. Check by opening the URL in
+   Safari: JSON means the right one, a Vercel login page means the wrong one.
    - **Method:** `POST`
    - **Headers:**
      - `Authorization` → `Bearer <the token you just minted>`
@@ -56,6 +64,8 @@ the app's needs-attention list rather than in the notification.
 | `{"status":"duplicate","recipeId":"..."}` | Already in the library. Nothing was created. |
 | `{"error":"unauthorized"}` | The token is wrong, revoked, or the header is malformed. |
 | `{"error":"invalid url"}` | The share sheet sent something that is not a URL. |
+| Sits on "Running" and never finishes | The URL is a protected Vercel alias — see the warning in step 4. The request never reaches the app. |
+| "The network connection was lost" | Either the same protected-alias problem, or the function is failing before its handler runs — check `/api/health`. |
 
 ## Blocked publishers
 
