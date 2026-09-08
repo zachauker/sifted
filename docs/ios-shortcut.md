@@ -24,13 +24,30 @@ Then, on the phone:
 4. Add a **Get Contents of URL** action:
    - **URL:** `https://<your-app-domain>/api/import`
 
-   **Use the production domain, not a deployment or branch alias.** Vercel
-   protects `<project>-<team>.vercel.app` and `<project>-git-<branch>-<team>.vercel.app`
-   with its own authentication, which blocks the request at the edge before any
-   of this app's code runs. A browser gets bounced to a Vercel login page; a
-   Shortcut has nowhere to go and sits on "Running" forever, with nothing in the
-   app's logs to show the request ever arrived. Check by opening the URL in
-   Safari: JSON means the right one, a Vercel login page means the wrong one.
+   **The URL must be the one that answers directly — never one that
+   redirects.** Two ways to get this wrong, and they fail identically:
+
+   - **A redirecting host.** `sifted.sh` is configured to redirect to
+     `www.sifted.sh`. A 308 on a POST requires the client to replay the method,
+     the body *and* the `Authorization` header against the new URL, and
+     Shortcuts does not do that reliably — it stalls on "Running" instead. Use
+     whichever host Vercel serves directly (currently `www.sifted.sh`), or
+     change which one is primary in Vercel's domain settings.
+   - **A deployment or branch alias.** `<project>-<team>.vercel.app` and
+     `<project>-git-<branch>-<team>.vercel.app` are covered by Vercel's own
+     authentication and are rejected before this app runs.
+
+   Both are handled at the edge, so **no function is invoked and nothing appears
+   in the runtime logs** — the request looks like it was never made, which is
+   what makes this expensive to diagnose. Verify with one command:
+
+   ```bash
+   curl -i -X POST https://<the exact url you put in the Shortcut> \
+     -H 'content-type: application/json' -d '{}'
+   ```
+
+   `401 {"error":"unauthorized"}` is the right URL — that is this app talking.
+   A `3xx` with a `location:` header, or a Vercel login page, is the wrong one.
    - **Method:** `POST`
    - **Headers:**
      - `Authorization` → `Bearer <the token you just minted>`
@@ -64,7 +81,7 @@ the app's needs-attention list rather than in the notification.
 | `{"status":"duplicate","recipeId":"..."}` | Already in the library. Nothing was created. |
 | `{"error":"unauthorized"}` | The token is wrong, revoked, or the header is malformed. |
 | `{"error":"invalid url"}` | The share sheet sent something that is not a URL. |
-| Sits on "Running" and never finishes | The URL is a protected Vercel alias — see the warning in step 4. The request never reaches the app. |
+| Sits on "Running" and never finishes | The URL redirects, or is a protected alias — see step 4. The request never reaches the app. |
 | "The network connection was lost" | Either the same protected-alias problem, or the function is failing before its handler runs — check `/api/health`. |
 
 ## Blocked publishers
