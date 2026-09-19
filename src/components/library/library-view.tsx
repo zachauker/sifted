@@ -107,11 +107,13 @@ export function LibraryView({
   const railId = useId()
   const sortId = useId()
   const searchId = useId()
+  const searchFormId = useId()
 
   // The bottom sheet's dialog semantics: where focus goes when it opens,
   // and where it comes back to when it closes.
   const dialogRef = useRef<HTMLElement>(null)
   const filtersToggleRef = useRef<HTMLButtonElement>(null)
+  const searchInputRef = useRef<HTMLInputElement>(null)
   const wasSheetOpenRef = useRef(false)
 
   const groups = useMemo(
@@ -305,24 +307,65 @@ export function LibraryView({
   // once typing pauses rather than once per character.
   const announcedSummary = useDebouncedValue(summary, 500)
 
+  const searching = trimmedQuery !== ''
+
+  // Rendered in one of two places in the results header below (beside the
+  // summary at rest, under it while searching), and only ever one at a time.
+  const sortControl = (
+    <div className="flex shrink-0 items-center gap-2">
+      {/* Visually hidden on a phone, where "Newest first" in the select
+          already says what the control is and the width goes to the
+          summary beside it. Still the select's accessible name everywhere. */}
+      <label htmlFor={sortId} className="text-sm text-ink-muted max-sm:sr-only">
+        Sort
+      </label>
+      <select
+        id={sortId}
+        value={state.sort}
+        onChange={(event) =>
+          setState((current) => ({ ...current, sort: event.target.value as SortKey }))
+        }
+        className="min-h-11 rounded-md border border-line bg-bg px-2 text-base transition-colors duration-(--dur-fast) hover:border-line-strong sm:text-sm"
+      >
+        {SORTS.map((sort) => (
+          <option key={sort} value={sort}>
+            {SORT_LABELS[sort]}
+          </option>
+        ))}
+      </select>
+    </div>
+  )
+
   return (
     <div className="flex flex-1 flex-col">
-      {/* Visually hidden: the toolbar below is dense enough already, and
-          every other route's visible `<h1>` is a page-name header this
-          route deliberately has no room for. The document still needs
-          exactly one, so it exists — just not on screen. */}
+      {/* Visually hidden: every other route's visible `<h1>` is a page-name
+          header this route deliberately has no room for. The document still
+          needs exactly one, so it exists — just not on screen. */}
       <h1 className="sr-only">Recipe library</h1>
 
+      {/*
+        The only sticky thing on the page is the two controls you reach for
+        mid-scroll: Filters and the search field. One row, 61px, at every
+        width.
+
+        It used to hold everything — the toggle, the field, the second search
+        tier, the results summary and Sort — in one wrapping flex row. On a
+        375px phone that wrapped into four rows and 217px of pinned chrome,
+        and because the summary grows with the query, typing "chicken" pushed
+        it to 271px and moved the field down under the cursor mid-word. The
+        summary, the second tier and Sort now sit in the results header at the
+        top of the grid, which scrolls away with it.
+      */}
       <div
         // `inert` while the sheet is open takes the whole toolbar — search
-        // box, sort, the Filters toggle itself — out of the tab order and
-        // the accessibility tree along with everything else behind the
-        // scrim, the other half of the focus trap below: that one stops
-        // Tab from leaving the dialog, this stops a click or a screen
-        // reader's virtual cursor from reaching behind it.
+        // box, the Filters toggle itself — out of the tab order and the
+        // accessibility tree along with everything else behind the scrim,
+        // the other half of the focus trap below: that one stops Tab from
+        // leaving the dialog, this stops a click or a screen reader's
+        // virtual cursor from reaching behind it.
         inert={sheet}
         data-testid="library-toolbar"
-        className="sticky top-0 z-(--z-sticky) flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-line bg-bg/95 px-4 py-2 backdrop-blur-sm"
+        className="sticky top-0 z-(--z-sticky) flex items-center gap-3 border-b border-line bg-bg/95 px-4 py-2 backdrop-blur-sm"
       >
         {/* Hidden outright rather than only CSS-hidden on a wide screen, so
             it is out of the tab order there too. */}
@@ -333,11 +376,11 @@ export function LibraryView({
           aria-expanded={sheetOpen}
           aria-controls={railId}
           onClick={() => setSheetOpen((open) => !open)}
-          className={`inline-flex min-h-11 items-center gap-1.5 rounded-md border px-3 text-sm font-medium transition-colors duration-(--dur-fast) ease-(--ease-out-quart) lg:hidden ${
+          className={`inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-md border px-3 text-sm font-medium transition-colors duration-(--dur-fast) ease-(--ease-out-quart) lg:hidden ${
             state.selected.length > 0
               ? 'border-accent bg-accent-soft text-accent-on-soft'
               : 'border-line text-ink hover:bg-sunken'
-          } order-1 sm:order-none`}
+          }`}
         >
           Filters
           {state.selected.length > 0 && (
@@ -358,22 +401,18 @@ export function LibraryView({
 
         <form
           role="search"
+          id={searchFormId}
           onSubmit={(event) => {
             event.preventDefault()
             void searchInsideRecipes()
           }}
-          // `flex-wrap` and a flexible input, because without them this row
-          // could not fit a 375px phone: the field and the "Search inside
-          // recipes" button were laid out at their natural widths inside a
-          // non-wrapping flex row, so the button overflowed the toolbar's own
-          // `px-4` and sat flush against the viewport edge with its right
-          // border clipped off. The toolbar wraps; this row has to as well.
-          className="order-2 flex w-full min-w-0 flex-wrap items-center gap-2 sm:order-none sm:w-auto"
+          className="relative min-w-0 flex-1 lg:max-w-md"
         >
           <label htmlFor={searchId} className="sr-only">
             Search recipes
           </label>
           <input
+            ref={searchInputRef}
             id={searchId}
             type="search"
             value={query}
@@ -384,68 +423,39 @@ export function LibraryView({
             // on blur, leaving the whole page zoomed. `sm:text-sm` reverts
             // to the tighter size once the viewport is wide enough that
             // nothing is zooming on tap in the first place.
-            className="min-h-11 min-w-0 flex-1 basis-48 rounded-md border border-line bg-bg px-3 text-base transition-colors duration-(--dur-fast) placeholder:text-ink-muted hover:border-line-strong focus:border-accent sm:w-64 sm:flex-none sm:basis-auto sm:text-sm"
+            //
+            // The WebKit cancel glyph is suppressed because the field draws
+            // its own clear button below: with both, a search showed two
+            // different "×" controls for one action, and Firefox shows none.
+            className="min-h-11 w-full rounded-md border border-line bg-bg pr-11 pl-3 text-base transition-colors duration-(--dur-fast) placeholder:text-ink-muted hover:border-line-strong focus:border-accent sm:text-sm [&::-webkit-search-cancel-button]:appearance-none"
           />
-          <button
-            type="submit"
-            disabled={trimmedQuery === '' || serverLoading}
-            className="min-h-11 shrink-0 rounded-md border border-line px-3 text-sm font-medium whitespace-nowrap transition-colors duration-(--dur-fast) ease-(--ease-out-quart) hover:bg-sunken disabled:opacity-50 disabled:hover:bg-transparent"
-          >
-            {serverLoading ? 'Searching…' : 'Search inside recipes'}
-          </button>
-          {trimmedQuery !== '' && (
+          {searching && (
             <button
               type="button"
-              onClick={clearSearch}
-              className="inline-flex min-h-11 shrink-0 items-center rounded-md px-2 text-xs font-medium text-accent-text transition-colors duration-(--dur-fast) hover:bg-accent-soft"
+              // The button removes itself by clearing the query, which would
+              // drop focus onto <body>; the field is where the next keystroke
+              // is going anyway.
+              onClick={() => {
+                clearSearch()
+                searchInputRef.current?.focus()
+              }}
+              aria-label="Clear search"
+              className="absolute inset-y-0 right-0 inline-flex w-11 items-center justify-center rounded-md text-ink-muted transition-colors duration-(--dur-fast) hover:text-ink"
             >
-              Clear search
+              <svg
+                viewBox="0 0 16 16"
+                className="size-4"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.75"
+                strokeLinecap="round"
+                aria-hidden="true"
+              >
+                <path d="M4 4l8 8M12 4l-8 8" />
+              </svg>
             </button>
           )}
         </form>
-
-        {/* Visible copy, unthrottled: a sighted reader benefits from the
-            count updating on every keystroke. */}
-        <p data-testid="results-summary" className="order-1 text-sm text-ink-muted sm:order-none">
-          {summary}
-        </p>
-        {/* The screen-reader announcement of the same sentence, debounced
-            (see `useDebouncedValue`) so typing "chicken" produces one
-            announcement after the pause instead of seven mid-word ones.
-            `role="status"` carries its own implicit `aria-live="polite"`
-            and `aria-atomic="true"`, so the whole sentence is read, not a
-            diff of it. Separate from the visible paragraph above on
-            purpose — debouncing that one too would mean the on-screen
-            count lagging behind the grid it describes. */}
-        <p role="status" className="sr-only">
-          {announcedSummary}
-        </p>
-
-        {serverErrored && (
-          <p role="alert" className="text-sm font-medium text-danger">
-            Searching inside recipes failed. Try again.
-          </p>
-        )}
-
-        <div className="order-3 ml-auto flex items-center gap-2 sm:order-none">
-          <label htmlFor={sortId} className="text-sm text-ink-muted">
-            Sort
-          </label>
-          <select
-            id={sortId}
-            value={state.sort}
-            onChange={(event) =>
-              setState((current) => ({ ...current, sort: event.target.value as SortKey }))
-            }
-            className="min-h-11 rounded-md border border-line bg-bg px-2 text-base transition-colors duration-(--dur-fast) hover:border-line-strong sm:text-sm"
-          >
-            {SORTS.map((sort) => (
-              <option key={sort} value={sort}>
-                {SORT_LABELS[sort]}
-              </option>
-            ))}
-          </select>
-        </div>
       </div>
 
       {selectedValues.length > 0 && (
@@ -496,10 +506,13 @@ export function LibraryView({
           // to focus if the sheet somehow opens with nothing focusable
           // inside it.
           tabIndex={sheet ? -1 : undefined}
+          // The rail sticks exactly under the toolbar: 0.5rem padding above
+          // and below a 2.75rem control, plus its 1px rule. It was `top-14`
+          // (3.5rem), which slid the rail's first 5px under the toolbar.
           className={
             sheet
               ? 'fixed inset-x-0 bottom-0 z-(--z-sheet) max-h-[75vh] animate-[sheet-in_240ms_cubic-bezier(0.25,1,0.5,1)] overflow-y-auto overscroll-contain rounded-t-xl border-t border-line bg-bg p-4 pb-8 shadow-(--shadow-overlay) outline-none'
-              : 'w-60 shrink-0 self-stretch border-r border-line bg-rail p-4 max-lg:hidden lg:sticky lg:top-14 lg:max-h-[calc(100vh-3.5rem)] lg:overflow-y-auto'
+              : 'w-60 shrink-0 self-stretch border-r border-line bg-rail p-4 max-lg:hidden lg:sticky lg:top-[calc(3.75rem+1px)] lg:max-h-[calc(100vh-3.75rem-1px)] lg:overflow-y-auto'
           }
         >
           <FilterRail
@@ -524,6 +537,60 @@ export function LibraryView({
           data-testid="library-grid-region"
           className="min-w-0 flex-1 p-(--gap-page)"
         >
+          {/* The results header: what the grid is showing, how it is sorted,
+              and — once there is a query — the second search tier, beside
+              the sentence that says which tier answered. */}
+          <div className="mb-6 flex flex-col gap-3">
+            <div className="flex items-center justify-between gap-4">
+              <div className="min-w-0">
+                {/* Visible copy, unthrottled: a sighted reader benefits from
+                    the count updating on every keystroke. */}
+                <p data-testid="results-summary" className="text-sm text-ink-muted">
+                  {summary}
+                </p>
+                {/* The screen-reader announcement of the same sentence,
+                    debounced (see `useDebouncedValue`) so typing "chicken"
+                    produces one announcement after the pause instead of seven
+                    mid-word ones. `role="status"` carries its own implicit
+                    `aria-live="polite"` and `aria-atomic="true"`, so the whole
+                    sentence is read, not a diff of it. */}
+                <p role="status" className="sr-only">
+                  {announcedSummary}
+                </p>
+              </div>
+              {!searching && sortControl}
+            </div>
+            {/* While searching, the summary gets the full width — beside Sort
+                on a phone it wrapped to four lines — and Sort drops to share a
+                row with the second tier instead. */}
+            {searching && (
+              <div className="flex items-center justify-between gap-4">
+                <div className="flex min-w-0 flex-wrap items-center gap-3">
+                  {/* Only offered while it can change the answer: with no
+                      query it did nothing, and at 50% opacity beside the
+                      field it read as a second, empty search box. It submits
+                      the toolbar's form, so Enter in the field does the same. */}
+                  {mode !== 'server' && (
+                    <button
+                      type="submit"
+                      form={searchFormId}
+                      disabled={serverLoading}
+                      className="min-h-11 shrink-0 rounded-md border border-line bg-bg px-3 text-sm font-medium whitespace-nowrap transition-colors duration-(--dur-fast) ease-(--ease-out-quart) hover:bg-sunken disabled:opacity-60"
+                    >
+                      {serverLoading ? 'Searching…' : 'Search inside recipes'}
+                    </button>
+                  )}
+                  {serverErrored && (
+                    <p role="alert" className="text-sm font-medium text-danger">
+                      Searching inside recipes failed. Try again.
+                    </p>
+                  )}
+                </div>
+                {sortControl}
+              </div>
+            )}
+          </div>
+
           {entries.length === 0 ? (
             <p className="py-16 text-center text-sm text-ink-muted">
               Nothing in the library yet. Add a recipe with the Add link above and it will show up
