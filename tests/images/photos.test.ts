@@ -131,6 +131,33 @@ describe('removePhoto', () => {
     expect(after.sourceHeroDismissed).toBe(false)
   })
 
+  it('keeps the row when the thumbnail delete fails after the full-size delete succeeds', async () => {
+    // A half-finished delete: `store.delete` for the full-size blob resolves,
+    // then the thumbnail delete throws. The row must survive so the photo
+    // stays on screen — and because Vercel Blob's `del` is a no-op for a key
+    // that is already gone, retrying is safe: it will not error a second time
+    // on the blob that already succeeded.
+    const recipe = await insertRecipe()
+    const hero = await insertHero(recipe.id)
+    let fullDeleted = false
+    const failing: BlobStore = {
+      ...store,
+      async delete(key: string) {
+        if (key.endsWith('-thumb.webp')) throw new Error('blob store unavailable')
+        fullDeleted = true
+        return store.delete(key)
+      },
+    }
+
+    expect(await removePhoto(db, failing, recipe.id, hero.id)).toEqual({ status: 'storage_failed' })
+
+    expect(fullDeleted).toBe(true)
+    expect(store.keys()).toEqual([hero.thumbKey])
+    expect(await db.select().from(images)).toHaveLength(1)
+    const [after] = await db.select().from(recipes)
+    expect(after.sourceHeroDismissed).toBe(false)
+  })
+
   it('refuses an image that belongs to another recipe, and deletes nothing', async () => {
     const mine = await insertRecipe('mine')
     const theirs = await insertRecipe('theirs')
