@@ -168,7 +168,9 @@ describe('the recipe header', () => {
         recipe={recipe({
           images: [
             {
+              id: 'img-hero',
               role: 'source_hero',
+              isCover: false,
               blobUrl: 'https://blob.example.com/hero.webp',
               thumbUrl: 'https://blob.example.com/thumb.webp',
               width: 1600,
@@ -194,7 +196,9 @@ describe('the recipe header', () => {
         recipe={recipe({
           images: [
             {
+              id: 'img-hero',
               role: 'source_hero',
+              isCover: false,
               blobUrl: 'https://blob.example.com/hero.webp',
               thumbUrl: 'https://blob.example.com/thumb.webp',
               width: 1600,
@@ -225,13 +229,28 @@ describe('the recipe header', () => {
       <RecipeView
         recipe={recipe({
           images: [
-            { role: 'source_hero', blobUrl: null, thumbUrl: null, width: 1600, height: 1067 },
+            { id: 'img-legacy', role: 'source_hero', isCover: false, blobUrl: null, thumbUrl: null, width: 1600, height: 1067 },
           ],
         })}
       />,
     )
 
     expect(document.querySelectorAll('img')).toHaveLength(0)
+  })
+
+  it('shows the photo a person chose as the cover, not the publisher photo', () => {
+    render(
+      <RecipeView
+        recipe={recipe({
+          images: [
+            { id: 'img-hero', role: 'source_hero', isCover: false, blobUrl: 'https://blob.example.com/hero.webp', thumbUrl: 'https://blob.example.com/hero-thumb.webp', width: 1600, height: 1067 },
+            { id: 'img-mine', role: 'user', isCover: true, blobUrl: 'https://blob.example.com/mine.webp', thumbUrl: 'https://blob.example.com/mine-thumb.webp', width: 1600, height: 1200 },
+          ],
+        })}
+      />,
+    )
+
+    expect(document.querySelector('img')).toHaveAttribute('src', 'https://blob.example.com/mine.webp')
   })
 })
 

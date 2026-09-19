@@ -1,6 +1,7 @@
 import Image from 'next/image'
 import Link from 'next/link'
 import type { RecipeDetail } from '@/lib/db/queries/recipe-detail'
+import { pickCover } from '@/lib/images/cover'
 import { DEFAULT_SORT, filterStateToQuery } from '@/lib/library/filter'
 import { EditControls, RecipeTimes, UserFieldsProvider } from './edit-controls'
 import { IngredientList } from './ingredient-list'
@@ -47,14 +48,10 @@ import { humanizeTagValue } from './format'
  * columns to be reliable, and they are not yet.
  */
 export function RecipeView({ recipe }: { recipe: RecipeDetail }) {
-  // A `source_hero` with a stored URL, else any image with one. `blobUrl` is
-  // nullable — rows ingested before the column existed have keys but no URL,
-  // and a key alone cannot be turned back into a fetchable address. Those must
-  // render as *no image*, never as an `<img>` with an empty src, which is the
-  // browser's broken-image icon.
-  const hero =
-    recipe.images.find((image) => image.role === 'source_hero' && image.blobUrl) ??
-    recipe.images.find((image) => image.blobUrl)
+  // The cover rule — a chosen photo, else the publisher's, else the oldest —
+  // skipping rows with no stored URL, which must render as no image rather
+  // than an `<img>` with an empty src (the browser's broken-image icon).
+  const hero = pickCover(recipe.images)
 
   const sourceLabel = sourceHost(recipe)
   const servings = servingsLabel(recipe)

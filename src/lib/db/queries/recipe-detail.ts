@@ -67,7 +67,9 @@ export type DetailTag = {
 }
 
 export type DetailImage = {
+  id: string
   role: 'source_hero' | 'user'
+  isCover: boolean
   blobUrl: string | null
   thumbUrl: string | null
   width: number
@@ -175,7 +177,9 @@ export async function getRecipeBySlug(db: Db, slug: string): Promise<RecipeDetai
       .orderBy(recipeTags.facet, recipeTags.value),
     db
       .select({
+        id: images.id,
         role: images.role,
+        isCover: images.isCover,
         blobUrl: images.blobUrl,
         thumbUrl: images.thumbUrl,
         width: images.width,
@@ -183,7 +187,10 @@ export async function getRecipeBySlug(db: Db, slug: string): Promise<RecipeDetai
       })
       .from(images)
       .where(eq(images.recipeId, recipe.id))
-      .orderBy(images.createdAt),
+      // Oldest first, which `pickCover` relies on for its last fallback.
+      // `created_at` is second-resolution and a multi-photo upload lands
+      // inside one second, so `rowid` — insertion order — breaks the tie.
+      .orderBy(images.createdAt, sql`${images}.rowid`),
   ])
 
   return {

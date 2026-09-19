@@ -208,7 +208,9 @@ describe('getRecipeBySlug', () => {
     expect(detail?.tags).toHaveLength(2)
     expect(detail?.images).toEqual([
       {
+        id: expect.any(String),
         role: 'source_hero',
+        isCover: false,
         blobUrl: 'https://blob.example.com/full.webp',
         thumbUrl: 'https://blob.example.com/thumb.webp',
         width: 1600,
