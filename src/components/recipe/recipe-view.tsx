@@ -6,6 +6,7 @@ import { DEFAULT_SORT, filterStateToQuery } from '@/lib/library/filter'
 import { EditControls, RecipeTimes, UserFieldsProvider } from './edit-controls'
 import { IngredientList } from './ingredient-list'
 import { NarrativeFold } from './narrative-fold'
+import { PhotoStrip } from './photo-strip'
 import { StepList } from './step-list'
 import { humanizeTagValue } from './format'
 
@@ -52,6 +53,11 @@ export function RecipeView({ recipe }: { recipe: RecipeDetail }) {
   // skipping rows with no stored URL, which must render as no image rather
   // than an `<img>` with an empty src (the browser's broken-image icon).
   const hero = pickCover(recipe.images)
+
+  // Everything renderable that is not already the cover. Empty when there is
+  // no cover, because `pickCover` only comes back empty-handed when nothing
+  // is renderable.
+  const others = recipe.images.filter((image) => image.blobUrl && image.id !== hero?.id)
 
   const sourceLabel = sourceHost(recipe)
   const servings = servingsLabel(recipe)
@@ -181,6 +187,8 @@ export function RecipeView({ recipe }: { recipe: RecipeDetail }) {
               className="mt-5 max-h-[min(38vh,400px)] w-full rounded-xl object-cover"
             />
           )}
+
+          {others.length > 0 && <PhotoStrip photos={others} />}
 
         </header>
 
