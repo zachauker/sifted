@@ -216,13 +216,16 @@ export function RecipeTimes({
   }
 
   return (
-    <div className="mt-4 flex flex-wrap items-center gap-2">
+    // A line of text under the byline, not a row of pills: the times and
+    // the yield are facts about the recipe, like its author, and drawn as
+    // grey pills they looked like the tag pills further down — two pill
+    // styles on one page, one meaning "fact" and one meaning "link".
+    <div className="mt-1 flex flex-wrap items-center gap-x-2 text-sm text-ink-muted">
       <TimeChip claimedMinutes={claimedMinutes} actualMinutes={fields.actualTimeMinutes} />
-      {servingsLabel && (
-        <p className="rounded-full bg-sunken px-3 py-1 text-sm text-ink-muted">
-          {servingsLabel}
-        </p>
+      {servingsLabel && (claimedMinutes !== null || fields.actualTimeMinutes !== null) && (
+        <span aria-hidden="true">·</span>
       )}
+      {servingsLabel && <p>{servingsLabel}</p>}
     </div>
   )
 }

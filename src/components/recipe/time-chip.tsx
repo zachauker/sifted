@@ -34,7 +34,7 @@ export function TimeChip({
     // Inline, not flex: the separator is a text node with real spaces around
     // it, and a flex container would trim them and glue the two halves
     // together.
-    <p className="font-num inline-block rounded-full bg-sunken px-3 py-1 text-sm tabular-nums">
+    <p className="font-num inline-block tabular-nums">
       {claimedMinutes !== null && (
         <span className="text-ink-muted">
           claims {formatMinutes(claimedMinutes)}
