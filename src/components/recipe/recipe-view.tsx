@@ -1,7 +1,7 @@
 import Image from 'next/image'
 import Link from 'next/link'
 import type { RecipeDetail } from '@/lib/db/queries/recipe-detail'
-import { pickCover } from '@/lib/images/cover'
+import { isRenderable, pickCover } from '@/lib/images/cover'
 import { DEFAULT_SORT, filterStateToQuery } from '@/lib/library/filter'
 import { EditControls, RecipeTimes, UserFieldsProvider } from './edit-controls'
 import { IngredientList } from './ingredient-list'
@@ -54,10 +54,12 @@ export function RecipeView({ recipe }: { recipe: RecipeDetail }) {
   // than an `<img>` with an empty src (the browser's broken-image icon).
   const hero = pickCover(recipe.images)
 
-  // Everything renderable that is not already the cover. Empty when there is
-  // no cover, because `pickCover` only comes back empty-handed when nothing
-  // is renderable.
-  const others = recipe.images.filter((image) => image.blobUrl && image.id !== hero?.id)
+  // Everything renderable that is not already the cover — `isRenderable` is
+  // the same predicate `pickCover` filtered on above, so a photo missing
+  // either stored URL is excluded here too rather than showing up as a
+  // thumbnail that fails to load. Empty when there is no cover, because
+  // `pickCover` only comes back empty-handed when nothing is renderable.
+  const others = recipe.images.filter((image) => isRenderable(image) && image.id !== hero?.id)
 
   const sourceLabel = sourceHost(recipe)
   const servings = servingsLabel(recipe)

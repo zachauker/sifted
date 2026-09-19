@@ -4,6 +4,7 @@ import Image from 'next/image'
 import { useId, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import type { DetailImage } from '@/lib/db/queries/recipe-detail'
+import { isRenderable } from '@/lib/images/cover'
 import { MAX_IMAGE_BYTES } from '@/lib/images/limits'
 
 const UPLOAD_ERRORS: Record<string, string> = {
@@ -69,7 +70,16 @@ export function PhotoManager({
           continue
         }
         const { error } = (await res.json().catch(() => ({}))) as { error?: string }
-        failed.push({ name: file.name, message: (error && UPLOAD_ERRORS[error]) || UPLOAD_FALLBACK })
+        // A platform-level 413 (a proxy or edge limit rejecting the body
+        // before the route ever runs) does not come back as our JSON error
+        // shape — it is plain text or HTML. The status code alone is still
+        // enough to know what happened, so a 413 with no recognized `error`
+        // falls back to the same too-large copy the route's own 413 gets.
+        const message =
+          (error && UPLOAD_ERRORS[error]) ||
+          (res.status === 413 ? UPLOAD_ERRORS.too_large : undefined) ||
+          UPLOAD_FALLBACK
+        failed.push({ name: file.name, message })
       } catch {
         failed.push({ name: file.name, message: UPLOAD_FALLBACK })
       }
@@ -130,6 +140,11 @@ export function PhotoManager({
             const isCover = photo.id === coverId
             const isConfirming = confirming === photo.id
             const preview = photo.thumbUrl ?? photo.blobUrl
+            // Both cover-rule implementations (`pickCover` and the library's
+            // SQL subquery) skip a photo missing either stored URL, so
+            // offering "Make cover" on one would silently change nothing when
+            // clicked.
+            const canBeCover = isRenderable(photo)
 
             return (
               <li key={photo.id} className="flex flex-col gap-2">
@@ -182,14 +197,16 @@ export function PhotoManager({
                     {isCover ? (
                       <span className="text-xs font-medium text-ink-muted">Cover</span>
                     ) : (
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => void makeCover(photo.id)}
-                        className={buttonClass}
-                      >
-                        Make cover
-                      </button>
+                      canBeCover && (
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => void makeCover(photo.id)}
+                          className={buttonClass}
+                        >
+                          Make cover
+                        </button>
+                      )
                     )}
                     <button
                       type="button"
@@ -228,8 +245,12 @@ export function PhotoManager({
 
       {(failures.length > 0 || actionError) && (
         <div role="alert" className="mt-2 rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger">
-          {failures.map((failure) => (
-            <p key={failure.name}>{`${failure.name}: ${failure.message}`}</p>
+          {failures.map((failure, index) => (
+            // Keyed by position, not `failure.name`: iOS routinely gives
+            // picked photos identical filenames (e.g. two shots both named
+            // "image.jpg"), and two failures sharing a name must still both
+            // render rather than colliding on a React key.
+            <p key={`${failure.name}-${index}`}>{`${failure.name}: ${failure.message}`}</p>
           ))}
           {actionError && <p>{actionError}</p>}
         </div>

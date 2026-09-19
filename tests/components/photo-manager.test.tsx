@@ -61,6 +61,18 @@ describe('PhotoManager', () => {
     expect(item(0).querySelector('img')).toBeNull()
   })
 
+  it('offers no Make cover button for a photo missing either stored URL', () => {
+    // Both cover-rule implementations skip a row unless it has both URLs, so
+    // a click here would silently change nothing — see `isRenderable` in
+    // `@/lib/images/cover`.
+    renderManager(
+      [HERO, photo('no-thumb', { thumbUrl: null }), photo('no-full', { blobUrl: null })],
+      'hero',
+    )
+    expect(within(item(1)).queryByRole('button', { name: 'Make cover' })).not.toBeInTheDocument()
+    expect(within(item(2)).queryByRole('button', { name: 'Make cover' })).not.toBeInTheDocument()
+  })
+
   it('makes a photo the cover and refreshes', async () => {
     fetchMock.mockResolvedValue(Response.json({ ok: true }))
     renderManager()
@@ -176,5 +188,43 @@ describe('PhotoManager', () => {
     const alert = await screen.findByRole('alert')
     expect(alert).toHaveTextContent('odd.jpg')
     expect(alert).toHaveTextContent('Couldn’t read this image.')
+  })
+
+  it('renders both failures when two picked files share a name, with no duplicate-key warning', async () => {
+    // iOS routinely hands back multiple picked photos all named "image.jpg".
+    // Keying the list by name alone renders both <p>s (React does not drop
+    // elements over a key collision on initial render) but logs "Encountered
+    // two children with the same key" — asserting only on the rendered text
+    // would pass even with the bug, so this checks the console instead.
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    fetchMock.mockResolvedValue(new Response('{"error":"unsupported"}', { status: 415 }))
+    renderManager()
+
+    await userEvent.upload(screen.getByLabelText('Add photos'), [
+      new File([new Uint8Array([1])], 'image.jpg', { type: 'image/jpeg' }),
+      new File([new Uint8Array([2])], 'image.jpg', { type: 'image/jpeg' }),
+    ])
+
+    const alert = await screen.findByRole('alert')
+    expect(within(alert).getAllByText(/image\.jpg/)).toHaveLength(2)
+    expect(consoleError.mock.calls.some((call) => String(call[0]).includes('same key'))).toBe(false)
+    consoleError.mockRestore()
+  })
+
+  it('treats a non-JSON 413 from the platform as too large', async () => {
+    // A proxy or edge limit can reject the body before the route ever runs,
+    // answering with a plain-text or HTML 413 rather than our JSON error
+    // shape. The status code alone still says enough.
+    fetchMock.mockResolvedValue(new Response('Request Entity Too Large', { status: 413 }))
+    renderManager()
+
+    await userEvent.upload(
+      screen.getByLabelText('Add photos'),
+      new File([new Uint8Array([1])], 'huge.jpg', { type: 'image/jpeg' }),
+    )
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('huge.jpg')
+    expect(alert).toHaveTextContent('up to 15 MB')
   })
 })

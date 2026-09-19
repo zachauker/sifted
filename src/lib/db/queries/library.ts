@@ -65,9 +65,16 @@ export async function buildLibraryIndex(db: Db): Promise<LibraryEntry[]> {
   // nothing. Nesting the subquery one level — an `SQL` chunk rather than a
   // `Column` chunk at the top level — keeps Drizzle from touching it, so
   // `images.id` and `recipes.id` stay `"images"."id"` and `"recipes"."id"`.
+  // Both renditions must be stored, not just the thumbnail — isRenderable in
+  // cover.ts applies the identical requirement in memory, and
+  // tests/db/cover-rule.test.ts runs both against the same rows. A row with
+  // only one URL (a legacy backfill, or a photo left half-written by a failed
+  // upload) is not something PhotoManager or RecipeView will draw, so it must
+  // not be picked as the library thumbnail either.
   const coverThumbUrl = sql`(
     SELECT ${images.thumbUrl} FROM ${images}
-    WHERE ${images.recipeId} = ${recipes.id} AND ${images.thumbUrl} IS NOT NULL
+    WHERE ${images.recipeId} = ${recipes.id}
+      AND ${images.thumbUrl} IS NOT NULL AND ${images.blobUrl} IS NOT NULL
     ORDER BY ${images.isCover} DESC, (${images.role} = 'source_hero') DESC,
       ${images.createdAt} ASC, ${images}.rowid ASC
     LIMIT 1
