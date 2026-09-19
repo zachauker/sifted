@@ -40,7 +40,10 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     return NextResponse.json({ error: 'bad_request' }, { status: 400 })
   }
 
-  // Checked against the declared size before the bytes are copied out.
+  // `formData()` above has already read the whole request body — there is no
+  // way to check size before that. What this check skips is the copy into a
+  // `Uint8Array` and the decode/resize work in `addPhoto`, for a file that is
+  // already known to be too large to store.
   if (file.size > MAX_IMAGE_BYTES) {
     return NextResponse.json({ error: 'too_large' }, { status: 413 })
   }

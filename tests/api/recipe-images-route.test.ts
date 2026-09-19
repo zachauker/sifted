@@ -98,7 +98,7 @@ describe('POST /api/recipes/[id]/images', () => {
     expect((await upload(form)).status).toBe(400)
   })
 
-  it('refuses an oversized file before reading it', async () => {
+  it('refuses an oversized file without copying or decoding it', async () => {
     const res = await upload(oneFile(new Uint8Array(MAX_IMAGE_BYTES + 1)))
     expect(res.status).toBe(413)
     expect(await res.json()).toEqual({ error: 'too_large' })
