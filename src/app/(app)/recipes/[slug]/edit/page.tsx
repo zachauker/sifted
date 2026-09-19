@@ -3,7 +3,9 @@ import { notFound } from 'next/navigation'
 import type { Metadata } from 'next'
 import { db } from '@/lib/db'
 import { getRecipeBySlug } from '@/lib/db/queries/recipe-detail'
+import { PhotoManager } from '@/components/recipe/photo-manager'
 import { RecipeEditForm } from '@/components/recipe/recipe-edit-form'
+import { pickCover } from '@/lib/images/cover'
 import { saveRecipeEdits } from './actions'
 
 /**
@@ -34,6 +36,21 @@ export default async function EditRecipePage({ params }: { params: Promise<{ slu
         Your rating, notes, and how long it really took are edited on the recipe itself and are not
         touched here.
       </p>
+
+      {/* Outside the form on purpose: photo changes save as they happen and
+          neither need nor trigger the form's Save. */}
+      <section aria-labelledby="photos-heading" className="mb-10">
+        <h2 id="photos-heading" className="text-lg font-semibold">Photos</h2>
+        <p className="mt-1 mb-4 text-sm text-ink-muted">
+          Changes to photos save as soon as you make them.
+        </p>
+        <PhotoManager
+          recipeId={recipe.id}
+          photos={recipe.images}
+          coverId={pickCover(recipe.images)?.id ?? null}
+        />
+      </section>
+
       <RecipeEditForm
         recipe={recipe}
         action={saveRecipeEdits.bind(null, { id: recipe.id, slug: recipe.slug })}
