@@ -43,7 +43,9 @@ Fill in:
 npm run db:migrate
 ```
 
-Four migrations, ending with the FTS5 virtual table. Verify:
+Six migrations (0000 through 0005): the FTS5 virtual table lands early, at
+0001, and the two most recent columns — `is_cover` on `images` and
+`source_hero_dismissed` on `recipes` — back per-recipe cover photos. Verify:
 
 ```bash
 npm run migrate:verify
@@ -51,6 +53,14 @@ npm run migrate:verify
 
 It should report 0 recipes and fail its 156-recipe expectation — correct at this
 point, and proof the connection works.
+
+**Migration 0005 must run before a build that queries it.** `npm run
+db:migrate` needs to reach Turso before you promote a build containing
+migration 0005 — the newer code selects `is_cover` and
+`source_hero_dismissed`, and it will error against a database that has not
+been migrated yet. The reverse order is safe: older code runs unmodified
+against a database whose schema is already migrated, since it simply never
+asks for the new columns.
 
 ## 4. Blob storage
 

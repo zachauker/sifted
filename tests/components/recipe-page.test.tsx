@@ -168,7 +168,9 @@ describe('the recipe header', () => {
         recipe={recipe({
           images: [
             {
+              id: 'img-hero',
               role: 'source_hero',
+              isCover: false,
               blobUrl: 'https://blob.example.com/hero.webp',
               thumbUrl: 'https://blob.example.com/thumb.webp',
               width: 1600,
@@ -194,7 +196,9 @@ describe('the recipe header', () => {
         recipe={recipe({
           images: [
             {
+              id: 'img-hero',
               role: 'source_hero',
+              isCover: false,
               blobUrl: 'https://blob.example.com/hero.webp',
               thumbUrl: 'https://blob.example.com/thumb.webp',
               width: 1600,
@@ -225,13 +229,28 @@ describe('the recipe header', () => {
       <RecipeView
         recipe={recipe({
           images: [
-            { role: 'source_hero', blobUrl: null, thumbUrl: null, width: 1600, height: 1067 },
+            { id: 'img-legacy', role: 'source_hero', isCover: false, blobUrl: null, thumbUrl: null, width: 1600, height: 1067 },
           ],
         })}
       />,
     )
 
     expect(document.querySelectorAll('img')).toHaveLength(0)
+  })
+
+  it('shows the photo a person chose as the cover, not the publisher photo', () => {
+    render(
+      <RecipeView
+        recipe={recipe({
+          images: [
+            { id: 'img-hero', role: 'source_hero', isCover: false, blobUrl: 'https://blob.example.com/hero.webp', thumbUrl: 'https://blob.example.com/hero-thumb.webp', width: 1600, height: 1067 },
+            { id: 'img-mine', role: 'user', isCover: true, blobUrl: 'https://blob.example.com/mine.webp', thumbUrl: 'https://blob.example.com/mine-thumb.webp', width: 1600, height: 1200 },
+          ],
+        })}
+      />,
+    )
+
+    expect(document.querySelector('img')).toHaveAttribute('src', 'https://blob.example.com/mine.webp')
   })
 })
 
@@ -900,5 +919,71 @@ describe('editing a recipe', () => {
     render(<RecipeView recipe={recipe({ handEdited: true })} />)
 
     expect(screen.getByText(/edited by hand/i)).toBeInTheDocument()
+  })
+})
+
+describe('more photos', () => {
+  beforeEach(() => {
+    // jsdom has no modal dialog. These stand-ins do the two things the
+    // component relies on: toggle `open`, and fire `close` on close().
+    HTMLDialogElement.prototype.showModal = function (this: HTMLDialogElement) {
+      this.setAttribute('open', '')
+    }
+    HTMLDialogElement.prototype.close = function (this: HTMLDialogElement) {
+      this.removeAttribute('open')
+      this.dispatchEvent(new Event('close'))
+    }
+  })
+
+  const img = (id: string, overrides: Partial<RecipeDetail['images'][number]> = {}) => ({
+    id,
+    role: 'user' as const,
+    isCover: false,
+    blobUrl: `https://blob.example.com/${id}.webp`,
+    thumbUrl: `https://blob.example.com/${id}-thumb.webp`,
+    width: 1600,
+    height: 1200,
+    ...overrides,
+  })
+
+  it('shows no strip when the cover is the only photo', () => {
+    render(<RecipeView recipe={recipe({ images: [img('hero', { role: 'source_hero' })] })} />)
+    expect(screen.queryByRole('list', { name: 'More photos' })).not.toBeInTheDocument()
+  })
+
+  it('lists every photo except the cover, and nothing without a stored URL', () => {
+    render(
+      <RecipeView
+        recipe={recipe({
+          images: [
+            img('hero', { role: 'source_hero' }),
+            img('one'),
+            img('legacy', { blobUrl: null, thumbUrl: null }),
+            img('two'),
+          ],
+        })}
+      />,
+    )
+
+    const strip = screen.getByRole('list', { name: 'More photos' })
+    const buttons = within(strip).getAllByRole('button')
+    expect(buttons.map((b) => b.getAttribute('aria-label'))).toEqual(['View photo 1 of 2', 'View photo 2 of 2'])
+    expect([...strip.querySelectorAll('img')].map((i) => i.getAttribute('src'))).toEqual([
+      'https://blob.example.com/one-thumb.webp',
+      'https://blob.example.com/two-thumb.webp',
+    ])
+  })
+
+  it('opens a photo full-size, and closes it again', async () => {
+    render(<RecipeView recipe={recipe({ images: [img('hero', { role: 'source_hero' }), img('one')] })} />)
+
+    await userEvent.click(screen.getByRole('button', { name: 'View photo 1 of 1' }))
+
+    const dialog = screen.getByRole('dialog', { name: 'Photo' })
+    expect(dialog).toHaveAttribute('open')
+    expect(dialog.querySelector('img')).toHaveAttribute('src', 'https://blob.example.com/one.webp')
+
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Close' }))
+    expect(dialog).not.toHaveAttribute('open')
   })
 })

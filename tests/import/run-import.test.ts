@@ -666,3 +666,41 @@ describe('runImport: the page is archived before extraction can fail', () => {
     expect(await archivedBytes()).toEqual(Buffer.from(original.bytes))
   })
 })
+
+/**
+ * Deleting the publisher's photo is a decision, and a re-import — which
+ * replaces the `source_hero` row wholesale — must not quietly reverse it.
+ */
+describe('runImport: a dismissed publisher photo stays dismissed', () => {
+  async function importOnce(ingest = fakeIngest()) {
+    const jobId = await newJob()
+    await runImport({
+      db, store, llm: fakeLlm(), jobId, url: SOURCE_URL,
+      allowExistingUpdate: true,
+      fetchPage: fakeFetch(fetchedPage(recipeHtml())), ingestHeroImage: ingest,
+    })
+    return ingest
+  }
+
+  it('does not download or store the publisher photo again', async () => {
+    await importOnce()
+    const [recipe] = await db.select().from(recipes)
+    await db.delete(images).where(eq(images.recipeId, recipe.id))
+    await db.update(recipes).set({ sourceHeroDismissed: true }).where(eq(recipes.id, recipe.id))
+
+    const ingest = await importOnce()
+
+    expect(ingest.calls).toEqual([])
+    expect(await db.select().from(images)).toEqual([])
+    const [after] = await db.select().from(recipes)
+    expect(after.sourceHeroDismissed).toBe(true)
+  })
+
+  it('still replaces the publisher photo of a recipe that never dismissed it', async () => {
+    await importOnce()
+    const ingest = await importOnce()
+
+    expect(ingest.calls).toHaveLength(1)
+    expect(await db.select().from(images)).toHaveLength(1)
+  })
+})

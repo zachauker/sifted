@@ -1,6 +1,6 @@
 /** @vitest-environment node */
 import { describe, it, expect } from 'vitest'
-import { parseArgs } from '../../scripts/repair-images'
+import { parseArgs, missingImageTargets } from '../../scripts/repair-images'
 
 describe('repair-images argument parsing', () => {
   it('refuses a run that would do nothing', () => {
@@ -31,5 +31,20 @@ describe('repair-images argument parsing', () => {
   it('takes a recipe and an image together', () => {
     expect(parseArgs(['--recipe=ham-pot-pie-xgl3ncf6', '--from=https://cdn/x.jpg']))
       .toMatchObject({ recipeId: 'ham-pot-pie-xgl3ncf6', from: 'https://cdn/x.jpg' })
+  })
+})
+
+describe('missingImageTargets', () => {
+  it('picks recipes with no image row', () => {
+    const rows = [
+      { id: 'a', dismissed: false },
+      { id: 'b', dismissed: false },
+    ]
+    expect(missingImageTargets(rows, new Set(['a']))).toEqual([{ id: 'b', dismissed: false }])
+  })
+
+  it('leaves alone a recipe whose publisher photo was deleted on purpose', () => {
+    const rows = [{ id: 'a', dismissed: true }]
+    expect(missingImageTargets(rows, new Set())).toEqual([])
   })
 })

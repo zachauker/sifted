@@ -1,10 +1,12 @@
 import Image from 'next/image'
 import Link from 'next/link'
 import type { RecipeDetail } from '@/lib/db/queries/recipe-detail'
+import { isRenderable, pickCover } from '@/lib/images/cover'
 import { DEFAULT_SORT, filterStateToQuery } from '@/lib/library/filter'
 import { EditControls, RecipeTimes, UserFieldsProvider } from './edit-controls'
 import { IngredientList } from './ingredient-list'
 import { NarrativeFold } from './narrative-fold'
+import { PhotoStrip } from './photo-strip'
 import { StepList } from './step-list'
 import { humanizeTagValue } from './format'
 
@@ -47,14 +49,17 @@ import { humanizeTagValue } from './format'
  * columns to be reliable, and they are not yet.
  */
 export function RecipeView({ recipe }: { recipe: RecipeDetail }) {
-  // A `source_hero` with a stored URL, else any image with one. `blobUrl` is
-  // nullable — rows ingested before the column existed have keys but no URL,
-  // and a key alone cannot be turned back into a fetchable address. Those must
-  // render as *no image*, never as an `<img>` with an empty src, which is the
-  // browser's broken-image icon.
-  const hero =
-    recipe.images.find((image) => image.role === 'source_hero' && image.blobUrl) ??
-    recipe.images.find((image) => image.blobUrl)
+  // The cover rule — a chosen photo, else the publisher's, else the oldest —
+  // skipping rows with no stored URL, which must render as no image rather
+  // than an `<img>` with an empty src (the browser's broken-image icon).
+  const hero = pickCover(recipe.images)
+
+  // Everything renderable that is not already the cover — `isRenderable` is
+  // the same predicate `pickCover` filtered on above, so a photo missing
+  // either stored URL is excluded here too rather than showing up as a
+  // thumbnail that fails to load. Empty when there is no cover, because
+  // `pickCover` only comes back empty-handed when nothing is renderable.
+  const others = recipe.images.filter((image) => isRenderable(image) && image.id !== hero?.id)
 
   const sourceLabel = sourceHost(recipe)
   const servings = servingsLabel(recipe)
@@ -184,6 +189,8 @@ export function RecipeView({ recipe }: { recipe: RecipeDetail }) {
               className="mt-5 max-h-[min(38vh,400px)] w-full rounded-xl object-cover"
             />
           )}
+
+          {others.length > 0 && <PhotoStrip photos={others} />}
 
         </header>
 

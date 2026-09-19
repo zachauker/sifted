@@ -370,7 +370,10 @@ export async function runImport(input: RunImportInput): Promise<void> {
     // on any problem, and the recipe is still stored and the job still
     // succeeds. A recipe without a picture is a recipe; a recipe lost because a
     // CDN hiccuped is not.
-    if (extracted.heroImageUrl) {
+    // Skipped outright, not downloaded and then discarded, when a person has
+    // deleted this recipe's publisher photo: the re-import is here to repair
+    // the words, and bringing back a picture someone removed is not a repair.
+    if (extracted.heroImageUrl && !existing?.sourceHeroDismissed) {
       const image = await input.ingestHeroImage({
         url: extracted.heroImageUrl,
         recipeId,

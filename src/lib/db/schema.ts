@@ -69,6 +69,13 @@ export const recipes = sqliteTable('recipes', {
   // to show its "edited by hand" marker.
   handEdited: integer('hand_edited', { mode: 'boolean' }).notNull().default(false),
 
+  // Set when a person deletes this recipe's `source_hero` image. It records
+  // that the publisher's photo was looked at and rejected, and it is the only
+  // thing that stops a re-import — which replaces the `source_hero` row
+  // wholesale — from quietly bringing it back. Nothing clears it: restoring a
+  // publisher photo is the `npm run images -- --recipe --from` escape hatch.
+  sourceHeroDismissed: integer('source_hero_dismissed', { mode: 'boolean' }).notNull().default(false),
+
   addedBy: text('added_by').references(() => users.id),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
@@ -160,6 +167,12 @@ export const images = sqliteTable('images', {
   // --repair-urls` backfills them without downloading anything.
   blobUrl: text('blob_url'),
   thumbUrl: text('thumb_url'),
+  // The photo a person chose to stand for the recipe. At most one per recipe,
+  // held by the cover route clearing every sibling in the same transaction.
+  // Absent a choice, the cover falls back to the `source_hero`, then the
+  // oldest photo — see `pickCover` in `@/lib/images/cover`, and its SQL twin
+  // in `buildLibraryIndex`.
+  isCover: integer('is_cover', { mode: 'boolean' }).notNull().default(false),
   width: integer('width').notNull(),
   height: integer('height').notNull(),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),

@@ -43,6 +43,19 @@ type Options = {
   limit: number | null
 }
 
+/**
+ * Recipes `--missing` should go looking for a picture for: no image row, and
+ * not a recipe whose publisher photo a person deleted. The second condition
+ * is the same one `runImport` honours — this script re-finding the photo
+ * from the archived page would undo that deletion just as surely.
+ */
+export function missingImageTargets<T extends { id: string; dismissed: boolean }>(
+  rows: T[],
+  withImages: Set<string>,
+): T[] {
+  return rows.filter((r) => !withImages.has(r.id) && !r.dismissed)
+}
+
 export function parseArgs(argv: string[]): Options {
   const o: Options = { repairUrls: false, missing: false, recipeId: null, from: null, dryRun: false, limit: null }
   for (const a of argv) {
@@ -169,9 +182,10 @@ async function main(): Promise<void> {
     const all = await db.select({
       id: recipes.id, title: recipes.title, slug: recipes.slug,
       url: recipes.sourceUrl, archive: recipes.archivedHtmlKey,
+      dismissed: recipes.sourceHeroDismissed,
     }).from(recipes)
     const have = new Set((await db.select({ id: images.recipeId }).from(images)).map((i) => i.id))
-    let targets = all.filter((r) => !have.has(r.id))
+    let targets = missingImageTargets(all, have)
     if (opts.limit) targets = targets.slice(0, opts.limit)
 
     log(`--missing: ${targets.length} recipes with no image`)

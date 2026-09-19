@@ -14,6 +14,16 @@ const nextConfig: NextConfig = {
       { protocol: 'https', hostname: '**.public.blob.vercel-storage.com' },
     ],
   },
+  experimental: {
+    // `src/proxy.ts` sits in front of every `/api/recipes/*` route, and Next
+    // buffers a body for the proxy only up to this limit (10 MB by default).
+    // Past it the route handler gets a *truncated* body with no error — a
+    // large phone photo would arrive cut short and be refused as unreadable.
+    // Photo uploads are capped at 15 MB (`MAX_IMAGE_BYTES`); this leaves room
+    // for the multipart envelope. `tests/build/proxy-body-limit.test.ts`
+    // holds the two together.
+    proxyClientMaxBodySize: '17mb',
+  },
 }
 
 export default nextConfig
