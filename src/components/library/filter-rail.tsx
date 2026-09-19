@@ -97,7 +97,13 @@ function FacetSection({
 
   return (
     <fieldset className="border-0 p-0">
-      <legend className="mb-1.5 text-xs font-semibold text-ink-muted">{group.label}</legend>
+      {/* The group's name, set in the same size as its options and heavier
+          than them, so it reads as the heading of what follows. It was 14px
+          and grey above 16px black options — smaller and quieter than the
+          things it named — and with 6px under it and 20px above, nine groups
+          ran together into one long checklist. `px-2` puts it on the same
+          edge as the checkboxes below rather than 8px to their left. */}
+      <legend className="mb-2 px-2 text-sm font-semibold text-ink">{group.label}</legend>
       <ul>
         {shown.map((value) => (
           <ValueRow key={value.token} value={value} onToggle={onToggle} />
@@ -107,7 +113,7 @@ function FacetSection({
         <button
           type="button"
           onClick={() => setExpanded((open) => !open)}
-          className="mt-0.5 inline-flex min-h-11 items-center rounded-md px-2 text-xs font-medium text-accent-text transition-colors duration-(--dur-fast) hover:bg-accent-soft"
+          className="mt-1 inline-flex min-h-11 items-center rounded-md px-2 text-xs font-medium text-accent-text transition-colors duration-(--dur-fast) hover:bg-accent-soft"
         >
           {expanded ? 'Show fewer' : `Show ${folded.length} more`}
         </button>
@@ -128,9 +134,13 @@ export function FilterRail({
   selectedCount: number
 }) {
   return (
+    // Two intervals, on purpose: the rail's heading sits 20px above the
+    // first group, and the groups sit 32px apart from each other — the gap
+    // between groups is the widest in the rail, which is what makes them
+    // read as groups.
     <div className="flex flex-col gap-5">
-      <div className="flex items-baseline justify-between gap-2">
-        <h2 className="text-sm font-semibold text-ink">Filters</h2>
+      <div className="flex items-baseline justify-between gap-2 px-2">
+        <h2 className="text-base font-semibold text-ink">Filters</h2>
         {selectedCount > 0 && (
           <button
             type="button"
@@ -146,9 +156,13 @@ export function FilterRail({
           Nothing in the library is tagged yet, so there is nothing to filter by.
         </p>
       )}
-      {groups.map((group) => (
-        <FacetSection key={group.facet} group={group} onToggle={onToggle} />
-      ))}
+      {groups.length > 0 && (
+        <div className="flex flex-col gap-8">
+          {groups.map((group) => (
+            <FacetSection key={group.facet} group={group} onToggle={onToggle} />
+          ))}
+        </div>
+      )}
     </div>
   )
 }
