@@ -37,6 +37,29 @@ describe('ingestUploadedImage', () => {
     expect(thumbMeta.width).toBe(480)
   })
 
+  it('reports display dimensions for a rotated phone upload, not the raw pixel dimensions', async () => {
+    // EXIF orientation 6 ("rotate 90° CW to display") is what an iPhone held
+    // upright for a portrait shot commonly writes: the encoded raster is
+    // landscape, but the photo must be stored and reported as portrait.
+    const store = createMemoryStore()
+    const rotated = new Uint8Array(
+      await sharp({
+        create: { width: 800, height: 600, channels: 3, background: { r: 120, g: 160, b: 90 } },
+      })
+        .jpeg()
+        .withMetadata({ orientation: 6 })
+        .toBuffer(),
+    )
+
+    const result = await ingestUploadedImage({ bytes: rotated, recipeId: 'r1', store })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.image).toMatchObject({ width: 600, height: 800 })
+    const fullMeta = await sharp(Buffer.from((await store.get(result.image.blobKey))!)).metadata()
+    expect(fullMeta.width).toBe(600)
+  })
+
   it('never reuses a key, so one upload cannot overwrite another or the publisher photo', async () => {
     const store = createMemoryStore()
     const bytes = await jpegBytes(800, 600)

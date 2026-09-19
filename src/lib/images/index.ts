@@ -101,7 +101,16 @@ export type RenderedImage = {
  */
 export async function renderImage(bytes: Uint8Array): Promise<RenderedImage | null> {
   try {
-    const meta = await sharp(Buffer.from(bytes)).metadata()
+    // `limitInputPixels` caps decoding at 100 megapixels — comfortably above
+    // a 48 MP phone photo, and far below sharp's own ~268 MP default. Without
+    // it, an attacker-supplied (or simply enormous) file decodes to however
+    // many pixels it claims, which is the kind of unbounded work a decode
+    // step should never do on untrusted input. Above the cap, sharp refuses
+    // to decode, `renderImage` returns null, and the caller reports
+    // `unsupported` — the same outcome as any other file it cannot read.
+    const decodeOptions = { limitInputPixels: 100_000_000 }
+
+    const meta = await sharp(Buffer.from(bytes), decodeOptions).metadata()
     if (!meta.width || !meta.height) return null
 
     // `.rotate()` with no argument applies the EXIF orientation tag (when
@@ -110,22 +119,25 @@ export async function renderImage(bytes: Uint8Array): Promise<RenderedImage | nu
     // `meta.width`/`meta.height` are read BEFORE rotation and describe the
     // encoded raster, not the display orientation; for a 90/270-degree EXIF
     // orientation (5-8) sharp swaps the axes when rotating, so the reported
-    // width/height would be transposed relative to the output pixels. We
-    // only ever ingest photos in practice (orientation 1 or missing for the
-    // vast majority of blog/CDN sources); if a rotated source ever reaches
-    // here, swap width/height for orientation values 5-8 before returning.
+    // width/height would be transposed relative to the output pixels unless
+    // we correct for it here. This is not a rare edge case: a phone held
+    // upright for a portrait shot routinely writes orientation 6 (and 8 for
+    // the other rotation), so uploaded photos hit this branch often, not just
+    // the odd oddly-shot publisher image. Swapping width/height for
+    // orientation values 5-8 keeps the dimensions we store and return in
+    // sync with the upright pixels `.rotate()` actually produces below.
     const orientation = meta.orientation ?? 1
     const swapAxes = orientation >= 5 && orientation <= 8
     const width = swapAxes ? meta.height : meta.width
     const height = swapAxes ? meta.width : meta.height
 
-    const full = await sharp(Buffer.from(bytes))
+    const full = await sharp(Buffer.from(bytes), decodeOptions)
       .rotate()
       .resize({ width: FULL_MAX_WIDTH, withoutEnlargement: true })
       .webp({ quality: 82 })
       .toBuffer()
 
-    const thumb = await sharp(Buffer.from(bytes))
+    const thumb = await sharp(Buffer.from(bytes), decodeOptions)
       .rotate()
       .resize({ width: THUMB_WIDTH, withoutEnlargement: true })
       .webp({ quality: 74 })
