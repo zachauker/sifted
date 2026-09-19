@@ -77,15 +77,33 @@ export function RecipeView({ recipe }: { recipe: RecipeDetail }) {
     >
       <article className="mx-auto w-full max-w-5xl px-4 py-6 sm:px-6">
         <header>
-          <h1 className="text-2xl leading-tight font-semibold tracking-tight text-balance sm:text-3xl">
-            {recipe.title}
-          </h1>
+          {/* Edit sits beside the title, the one place every recipe has. It
+              used to be a row of its own under the attribution line, which
+              put a lone bordered button between the byline and the
+              description; and it could not simply join that line, because
+              the line renders only when a publisher, author or source exists
+              — and the recipes most likely to need correcting are exactly the
+              sparse ones that have none of them. */}
+          <div className="flex items-start justify-between gap-4">
+            <h1 className="text-2xl leading-tight font-semibold tracking-tight text-balance sm:text-3xl">
+              {recipe.title}
+            </h1>
+            <Link
+              href={`/recipes/${recipe.slug}/edit`}
+              className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-md border border-line px-3 text-sm font-medium text-ink transition-colors duration-(--dur-fast) ease-(--ease-out-quart) hover:bg-sunken"
+            >
+              Edit
+            </Link>
+          </div>
 
-          {(recipe.publisher || recipe.author || recipe.sourceUrl) && (
-            <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-ink-muted">
+          {(recipe.publisher || recipe.author || recipe.sourceUrl || recipe.handEdited) && (
+            <p className="mt-2 flex flex-wrap items-center gap-x-2 text-sm text-ink-muted">
               {recipe.publisher && <span>{recipe.publisher}</span>}
               {recipe.publisher && recipe.author && <span aria-hidden="true">·</span>}
               {recipe.author && <span>{recipe.author}</span>}
+              {(recipe.publisher || recipe.author) && recipe.sourceUrl && (
+                <span aria-hidden="true">·</span>
+              )}
               {recipe.sourceUrl && (
                 <a
                   href={recipe.sourceUrl}
@@ -98,31 +116,17 @@ export function RecipeView({ recipe }: { recipe: RecipeDetail }) {
                   {sourceLabel ? `View the original on ${sourceLabel}` : 'View the original'}
                 </a>
               )}
-            </p>
-          )}
-
-          {/* Its own row rather than a sibling inside the attribution line
-              above: that line renders only when a publisher, author or source
-              exists, and the recipes most likely to need correcting are
-              exactly the sparse ones that have none of them. */}
-          <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-ink-muted">
-            <Link
-              href={`/recipes/${recipe.slug}/edit`}
-              className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-md border border-line px-3 text-sm font-medium text-ink transition-colors duration-(--dur-fast) ease-(--ease-out-quart) hover:bg-sunken"
-            >
-              Edit
-            </Link>
-            {recipe.handEdited && (
-              // The counterpart to the warning a re-import will show: a recipe
-              // carrying corrections nothing can regenerate should say so,
-              // where the rest of its provenance is already stated.
-              <span>Edited by hand</span>
-            )}
-          </p>
-
-          {recipe.description && (
-            <p className="mt-3 max-w-prose text-base text-ink-muted">
-              {recipe.description}
+              {recipe.handEdited && (
+                // The counterpart to the warning a re-import will show: a
+                // recipe carrying corrections nothing can regenerate should
+                // say so, where the rest of its provenance is already stated.
+                <>
+                  {(recipe.publisher || recipe.author || recipe.sourceUrl) && (
+                    <span aria-hidden="true">·</span>
+                  )}
+                  <span>Edited by hand</span>
+                </>
+              )}
             </p>
           )}
 
@@ -135,6 +139,12 @@ export function RecipeView({ recipe }: { recipe: RecipeDetail }) {
               Notion bodies, with no times and no yield — look broken rather than
               merely brief. */}
           <RecipeTimes claimedMinutes={recipe.claimedTimeMinutes} servingsLabel={servings} />
+
+          {recipe.description && (
+            <p className="mt-4 max-w-prose text-base text-ink-muted">
+              {recipe.description}
+            </p>
+          )}
 
           {hero?.blobUrl && (
             <Image
@@ -175,24 +185,6 @@ export function RecipeView({ recipe }: { recipe: RecipeDetail }) {
             />
           )}
 
-          {recipe.tags.length > 0 && (
-            <ul aria-label="Tags" className="mt-4 flex flex-wrap gap-2">
-              {recipe.tags.map((tag) => (
-                <li key={`${tag.facet}:${tag.value}`}>
-                  <Link
-                    // Back to the library, filtered to this tag. The query
-                    // string is built by `filterStateToQuery` rather than
-                    // hand-assembled, so the parameter name and its encoding
-                    // stay owned by one module.
-                    href={`/${filterStateToQuery({ selected: [`${tag.facet}:${tag.value}`], sort: DEFAULT_SORT })}`}
-                    className="inline-flex min-h-11 items-center rounded-full border border-line px-3 text-xs font-medium text-ink-muted transition-colors duration-(--dur-fast) ease-(--ease-out-quart) hover:border-accent hover:bg-accent-soft hover:text-accent-on-soft"
-                  >
-                    {humanizeTagValue(tag.value)}
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          )}
         </header>
 
         {/* The recipe itself. Ingredients pinned beside the steps from `lg` up,
@@ -223,6 +215,38 @@ export function RecipeView({ recipe }: { recipe: RecipeDetail }) {
             them: it is the only place on the page the rating and the status
             appear at all. */}
         <EditControls />
+
+        {/* Tags come after the recipe, not before it. They are for getting
+            back to the library — every one links to it, filtered — and not
+            for cooking, so under the photo they were rows of pills a phone
+            had to scroll past to reach the first ingredient: 144px of them on
+            a 375px screen for a recipe with twelve tags. */}
+        {recipe.tags.length > 0 && (
+          <div className="mt-10">
+            <h2 className="text-sm font-semibold text-ink">Tags</h2>
+            {/* No row gap: every link is a 44px target around a 28px pill, so
+                the rows already sit 16px apart visually, and a gap on top of
+                that would double it. */}
+            <ul aria-label="Tags" className="mt-1 flex flex-wrap gap-x-1.5">
+              {recipe.tags.map((tag) => (
+                <li key={`${tag.facet}:${tag.value}`}>
+                  <Link
+                    // Back to the library, filtered to this tag. The query
+                    // string is built by `filterStateToQuery` rather than
+                    // hand-assembled, so the parameter name and its encoding
+                    // stay owned by one module.
+                    href={`/${filterStateToQuery({ selected: [`${tag.facet}:${tag.value}`], sort: DEFAULT_SORT })}`}
+                    className="group/tag inline-flex min-h-11 items-center rounded-full"
+                  >
+                    <span className="rounded-full bg-sunken px-3 py-1 text-xs font-medium text-ink-muted transition-colors duration-(--dur-fast) ease-(--ease-out-quart) group-hover/tag:bg-accent-soft group-hover/tag:text-accent-on-soft">
+                      {humanizeTagValue(tag.value)}
+                    </span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         <NarrativeFold html={recipe.narrativeHtml} publisher={recipe.publisher} />
       </article>

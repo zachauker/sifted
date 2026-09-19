@@ -216,16 +216,36 @@ export function RecipeTimes({
   }
 
   return (
-    <div className="mt-4 flex flex-wrap items-center gap-2">
+    // A line of text under the byline, not a row of pills: the times and
+    // the yield are facts about the recipe, like its author, and drawn as
+    // grey pills they looked like the tag pills further down — two pill
+    // styles on one page, one meaning "fact" and one meaning "link".
+    <div className="mt-1 flex flex-wrap items-center gap-x-2 text-sm text-ink-muted">
       <TimeChip claimedMinutes={claimedMinutes} actualMinutes={fields.actualTimeMinutes} />
-      {servingsLabel && (
-        <p className="rounded-full bg-sunken px-3 py-1 text-sm text-ink-muted">
-          {servingsLabel}
-        </p>
+      {servingsLabel && (claimedMinutes !== null || fields.actualTimeMinutes !== null) && (
+        <span aria-hidden="true">·</span>
       )}
+      {servingsLabel && <p>{servingsLabel}</p>}
     </div>
   )
 }
+
+/**
+ * The panel's row grammar. A label above its control on a phone; beside it
+ * from `sm` up, in a 12rem column — "How long it really took" is the longest
+ * label and is 11.2rem at 16px, so no label wraps and every control starts
+ * on the same edge.
+ */
+const ROW = 'flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-6'
+const ROW_LABEL = 'text-sm font-medium text-ink sm:w-48 sm:shrink-0'
+
+/**
+ * The panel's one quiet button: Clear, Cancel, Add a note, Edit notes. They
+ * were four slightly different underlined links (two sizes, three paddings);
+ * one class keeps them one thing. 44px tall like every other target here.
+ */
+const TEXT_BUTTON =
+  'inline-flex min-h-11 items-center rounded-md px-2 text-sm font-medium text-accent-on-soft underline underline-offset-2 transition-colors duration-(--dur-fast) hover:text-ink'
 
 const RATINGS = [1, 2, 3, 4, 5] as const
 
@@ -330,7 +350,7 @@ export function EditControls() {
   return (
     <section
       aria-labelledby="our-notes"
-      className="mt-12 rounded-xl bg-accent-soft p-5"
+      className="mt-12 rounded-xl bg-accent-soft p-4 sm:p-6"
     >
       <h2
         id="our-notes"
@@ -350,74 +370,99 @@ export function EditControls() {
         </p>
       )}
 
-      <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-3">
-        <div className="flex items-center gap-1">
-          <span className="mr-1 text-sm font-medium text-ink">Rating</span>
-          {/* No `role="group"` wrapper: `<details>` already exposes one for the
-              narrative fold, and a second on this page makes "the group" an
-              ambiguous thing to ask for. Each star carries its own label
-              ("4 stars"), which is what a screen reader announces anyway. */}
-          <div className="flex items-center">
-            {/* A mistap here writes a wrong rating whose only undo is the
-                "Clear" link below, so every star gets a full 44px tap
-                target — `min-h-11 min-w-11` around the same `text-xl`
-                glyph — rather than the glyph's own tiny box. The stars
-                still sit close together visually (there is no gap
-                between the buttons themselves); it is the invisible
-                padding inside each one that keeps a thumb from landing on
-                the wrong star. */}
-            {RATINGS.map((value) => {
-              const filled = fields.rating !== null && value <= fields.rating
-              return (
-                <button
-                  key={value}
-                  type="button"
-                  aria-pressed={fields.rating === value}
-                  aria-label={ratingPhrase(value)}
-                  onClick={() => chooseRating(value)}
-                  className={`flex min-h-11 min-w-11 items-center justify-center rounded-md text-xl leading-none transition-colors duration-(--dur-fast) ${
-                    filled
-                      ? 'text-accent-text'
-                      : 'text-ink-faint hover:text-accent-hover'
-                  }`}
-                >
-                  <span aria-hidden="true">★</span>
-                </button>
-              )
-            })}
+      {/*
+        One labelled row per fact, rather than one wrapping row for all of
+        them. The panel used to lay rating, status and time out in a single
+        `flex-wrap` line, which on a 375px phone let the rating group — a
+        `nowrap` run of label, five 44px stars and "Clear" — run 29px past
+        the panel's padding and out over its edge, and broke "How long it
+        really took" away from its own "minutes" and Save button. Here each
+        row stacks its label above its control on a phone and sets it beside
+        it from `sm` up, against a label column wide enough that the longest
+        label never wraps, so the controls line up on one edge.
+      */}
+      <div className="mt-4 flex flex-col gap-5">
+        <div className={ROW}>
+          <span className={ROW_LABEL}>Rating</span>
+          {/* `-ml-3` is an optical correction, not a layout one: each star is
+              a 44px button around a 20px glyph, so without it the first star
+              sits 12px in from the left edge every other row's control
+              starts on. */}
+          <div className="-ml-3 flex items-center">
+            {/* No `role="group"` wrapper: `<details>` already exposes one for
+                the narrative fold, and a second on this page makes "the
+                group" an ambiguous thing to ask for. Each star carries its own
+                label ("4 stars"), which is what a screen reader announces
+                anyway. */}
+            <div className="flex items-center">
+              {/* A mistap here writes a wrong rating whose only undo is the
+                  "Clear" link beside it, so every star gets a full 44px tap
+                  target — `min-h-11 min-w-11` around the same `text-xl`
+                  glyph — rather than the glyph's own tiny box. The stars
+                  still sit close together visually (there is no gap
+                  between the buttons themselves); it is the invisible
+                  padding inside each one that keeps a thumb from landing on
+                  the wrong star. */}
+              {RATINGS.map((value) => {
+                const filled = fields.rating !== null && value <= fields.rating
+                return (
+                  <button
+                    key={value}
+                    type="button"
+                    aria-pressed={fields.rating === value}
+                    aria-label={ratingPhrase(value)}
+                    onClick={() => chooseRating(value)}
+                    className={`flex min-h-11 min-w-11 items-center justify-center rounded-md text-xl leading-none transition-colors duration-(--dur-fast) ${
+                      filled ? 'text-accent-text' : 'text-ink-faint hover:text-accent-hover'
+                    }`}
+                  >
+                    <span aria-hidden="true">★</span>
+                  </button>
+                )
+              })}
+            </div>
+            {/* Only offered once there is something to clear. `null` and 0 are
+                different values in the schema, and this writes `null` — the
+                filter rail has no `rating:0` row, so a zero-star rating would
+                be a recipe invisible to every rating filter. "Unrated" is the
+                state a person means. */}
+            {fields.rating !== null && (
+              <button
+                type="button"
+                onClick={() => chooseRating(null)}
+                className={`ml-1 ${TEXT_BUTTON}`}
+              >
+                Clear
+              </button>
+            )}
           </div>
-          {/* Only offered once there is something to clear. `null` and 0 are
-              different values in the schema, and this writes `null` — the
-              filter rail has no `rating:0` row, so a zero-star rating would
-              be a recipe invisible to every rating filter. "Unrated" is the
-              state a person means. */}
-          {fields.rating !== null && (
-            <button
-              type="button"
-              onClick={() => chooseRating(null)}
-              className="inline-flex min-h-11 items-center rounded-md px-2 text-xs font-medium text-accent-on-soft underline underline-offset-2"
-            >
-              Clear
-            </button>
-          )}
         </div>
 
-        <div className="flex items-center gap-2">
-          {(['want_to_make', 'made_it'] as const).map((value) => (
-            <button
-              key={value}
-              type="button"
-              aria-pressed={fields.status === value}
-              onClick={() => toggleStatus(value)}
-              className={`inline-flex min-h-11 items-center justify-center rounded-full px-4 text-sm font-medium transition-colors duration-(--dur-fast) ease-(--ease-out-quart) ${
-                fields.status === value
-                  ? 'bg-accent text-accent-ink'
-                  : 'border border-line bg-bg text-ink-muted hover:border-line-strong hover:text-ink'
-              }`}
-            >
-              {STATUS_LABELS[value]}
-            </button>
-          ))}
+        <div className={ROW}>
+          <span className={ROW_LABEL}>Status</span>
+          {/* One segmented control rather than two free-standing pills: the
+              two states are one question with two answers, and drawing them
+              as a single joined shape says so. Both can still be off —
+              pressing the current one clears it (see `toggleStatus`). The
+              corners are on the buttons, not clipped by an `overflow-hidden`
+              parent, so the focus ring is never cut off. */}
+          <div className="inline-flex self-start rounded-md border border-line bg-bg">
+            {(['want_to_make', 'made_it'] as const).map((value) => (
+              <button
+                key={value}
+                type="button"
+                aria-pressed={fields.status === value}
+                onClick={() => toggleStatus(value)}
+                className={`inline-flex min-h-11 items-center justify-center px-4 text-sm font-medium transition-colors duration-(--dur-fast) ease-(--ease-out-quart) first:rounded-l-[calc(var(--radius-md)-1px)] last:rounded-r-[calc(var(--radius-md)-1px)] not-first:border-l not-first:border-line ${
+                  fields.status === value
+                    ? 'bg-accent text-accent-ink'
+                    : 'text-ink-muted hover:bg-sunken hover:text-ink'
+                }`}
+              >
+                {STATUS_LABELS[value]}
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* `noValidate` so `step={1}` below stays a keypad and stepper hint
@@ -428,118 +473,128 @@ export function EditControls() {
             submit, which is the exact shape of failure this panel exists to
             avoid. The check in `submitTime` says it in the app's own words,
             in the app's own alert region. */}
-        <form noValidate onSubmit={submitTime} className="flex flex-wrap items-center gap-2">
+        <form noValidate onSubmit={submitTime} className={ROW}>
           {/* Deliberately not phrased "took us …": that exact wording belongs
               to the chip at the top of the page, and two controls answering to
               it makes "what does the page say it took us" an ambiguous
               question for a screen reader and a test alike. */}
-          <label htmlFor="actual-time" className="text-sm font-medium text-ink">
+          <label htmlFor="actual-time" className={ROW_LABEL}>
             How long it really took
           </label>
-          <input
-            id="actual-time"
-            name="actualTimeMinutes"
-            // `inputMode` as well as `type`, because this is typed on a phone
-            // and the numeric keypad is the difference between a two-second
-            // entry and a fiddle.
-            type="number"
-            inputMode="numeric"
-            min={0}
-            step={1}
-            value={timeDraft}
-            onChange={(event) => {
-              setTimeDraft(event.target.value)
-              clearFailure()
-            }}
-            // `text-base` (16px) below the `sm` breakpoint: iOS Safari
-            // zooms in on focus for any input under 16px and does not
-            // zoom back out on blur — this field is edited mid-cook, on a
-            // phone, so leaving the page zoomed afterward is the worst
-            // possible moment for it. `w-24` (not the original `w-20`)
-            // gives the larger digits room without wrapping.
-            className="font-num min-h-11 w-24 rounded-md border border-line bg-bg px-2 text-base tabular-nums transition-colors duration-(--dur-fast) hover:border-line-strong sm:text-sm"
-          />
-          <span className="text-sm text-ink-muted">minutes</span>
-          <button
-            type="submit"
-            className="min-h-11 rounded-md border border-line bg-bg px-4 text-sm font-medium transition-colors duration-(--dur-fast) ease-(--ease-out-quart) hover:bg-sunken"
-          >
-            Save
-          </button>
-          {timeUnsaved && (
-            <span className="text-xs font-medium text-accent-on-soft">Not saved yet</span>
-          )}
-        </form>
-      </div>
-
-      {editingNotes ? (
-        <form onSubmit={submitNotes} className="mt-4">
-          <label htmlFor="notes" className="sr-only">
-            Our notes
-          </label>
-          <textarea
-            id="notes"
-            name="notes"
-            rows={5}
-            value={notesDraft}
-            autoFocus
-            onChange={(event) => setNotesDraft(event.target.value)}
-            placeholder="What did you change? What would you do differently?"
-            // `text-base` (16px) below `sm`: this field autofocuses, so
-            // the iOS zoom-on-focus this fixes fires the instant the panel
-            // opens, on the one field in the app most likely to be typed
-            // one-handed. `sm:text-[15px]` keeps the original reading size
-            // once the viewport is wide enough that focus doesn't zoom.
-            className="w-full rounded-lg border border-line bg-bg p-3 text-base leading-relaxed transition-colors duration-(--dur-fast) hover:border-line-strong sm:text-sm"
-          />
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            <button
-              type="submit"
-              className="min-h-11 rounded-md bg-accent px-4 text-sm font-semibold text-accent-ink transition-colors duration-(--dur-fast) ease-(--ease-out-quart) hover:bg-accent-hover"
-            >
-              Save notes
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                // Explicitly discards the draft, so it is a decision the user
-                // made rather than something that happened to them.
-                setNotesDraft(fields.notes ?? '')
-                setEditingNotes(false)
-                clearFailure()
-              }}
-              className="inline-flex min-h-11 items-center rounded-md px-2 text-sm font-medium text-accent-on-soft underline underline-offset-2"
-            >
-              Cancel
-            </button>
-            {notesUnsaved && (
+          {/* The field, its unit and its Save are one unit and wrap as one:
+              only "Not saved yet" is allowed to drop to a line of its own. */}
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <div className="flex items-center gap-2">
+              <input
+                id="actual-time"
+                name="actualTimeMinutes"
+                // `inputMode` as well as `type`, because this is typed on a
+                // phone and the numeric keypad is the difference between a
+                // two-second entry and a fiddle.
+                type="number"
+                inputMode="numeric"
+                min={0}
+                step={1}
+                value={timeDraft}
+                onChange={(event) => {
+                  setTimeDraft(event.target.value)
+                  clearFailure()
+                }}
+                // `text-base` (16px) below the `sm` breakpoint: iOS Safari
+                // zooms in on focus for any input under 16px and does not
+                // zoom back out on blur — this field is edited mid-cook, on a
+                // phone, so leaving the page zoomed afterward is the worst
+                // possible moment for it. `w-24` (not the original `w-20`)
+                // gives the larger digits room without wrapping.
+                className="font-num min-h-11 w-24 rounded-md border border-line bg-bg px-2 text-base tabular-nums transition-colors duration-(--dur-fast) hover:border-line-strong sm:text-sm"
+              />
+              <span className="text-sm text-ink-muted">minutes</span>
+              <button
+                type="submit"
+                className="ml-1 min-h-11 rounded-md border border-line bg-bg px-4 text-sm font-medium transition-colors duration-(--dur-fast) ease-(--ease-out-quart) hover:bg-sunken"
+              >
+                Save
+              </button>
+            </div>
+            {timeUnsaved && (
               <span className="text-xs font-medium text-accent-on-soft">Not saved yet</span>
             )}
           </div>
         </form>
-      ) : (
-        <div className="mt-3">
-          {fields.notes && (
-            // `whitespace-pre-line` because notes are typed by hand, in a
-            // textarea, and the line breaks someone put in are meaningful.
-            // Rendered as a text node — React escapes it, and notes never go
-            // near `dangerouslySetInnerHTML` or a sanitizer.
-            <p className="max-w-prose text-base leading-relaxed whitespace-pre-line text-ink">{fields.notes}</p>
-          )}
-          <button
-            type="button"
-            onClick={() => {
-              setNotesDraft(fields.notes ?? '')
-              setEditingNotes(true)
-            }}
-            className={`inline-flex min-h-11 items-center rounded-md text-sm font-medium text-accent-on-soft underline underline-offset-2 ${
-              fields.notes ? 'mt-2' : ''
-            }`}
-          >
-            {fields.notes ? 'Edit notes' : 'Add a note'}
-          </button>
-        </div>
-      )}
+      </div>
+
+      {/* The notes are prose, so they get the panel's full width below the
+          rows rather than a slot in the value column, set off by a rule. */}
+      <div className="mt-5 border-t border-accent-on-soft/15 pt-4">
+        {editingNotes ? (
+          <form onSubmit={submitNotes}>
+            <label htmlFor="notes" className="sr-only">
+              Our notes
+            </label>
+            <textarea
+              id="notes"
+              name="notes"
+              rows={5}
+              value={notesDraft}
+              autoFocus
+              onChange={(event) => setNotesDraft(event.target.value)}
+              placeholder="What did you change? What would you do differently?"
+              // `text-base` (16px) below `sm`: this field autofocuses, so
+              // the iOS zoom-on-focus this fixes fires the instant the panel
+              // opens, on the one field in the app most likely to be typed
+              // one-handed. `sm:text-sm` keeps the tighter reading size once
+              // the viewport is wide enough that focus doesn't zoom.
+              className="w-full rounded-lg border border-line bg-bg p-3 text-base leading-relaxed transition-colors duration-(--dur-fast) hover:border-line-strong sm:text-sm"
+            />
+            <div className="mt-3 flex flex-wrap items-center gap-3">
+              <button
+                type="submit"
+                className="min-h-11 rounded-md bg-accent px-4 text-sm font-semibold text-accent-ink transition-colors duration-(--dur-fast) ease-(--ease-out-quart) hover:bg-accent-hover"
+              >
+                Save notes
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  // Explicitly discards the draft, so it is a decision the user
+                  // made rather than something that happened to them.
+                  setNotesDraft(fields.notes ?? '')
+                  setEditingNotes(false)
+                  clearFailure()
+                }}
+                className={TEXT_BUTTON}
+              >
+                Cancel
+              </button>
+              {notesUnsaved && (
+                <span className="text-xs font-medium text-accent-on-soft">Not saved yet</span>
+              )}
+            </div>
+          </form>
+        ) : (
+          <>
+            {fields.notes && (
+              // `whitespace-pre-line` because notes are typed by hand, in a
+              // textarea, and the line breaks someone put in are meaningful.
+              // Rendered as a text node — React escapes it, and notes never go
+              // near `dangerouslySetInnerHTML` or a sanitizer.
+              <p className="mb-2 max-w-prose text-base leading-relaxed whitespace-pre-line text-ink">
+                {fields.notes}
+              </p>
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                setNotesDraft(fields.notes ?? '')
+                setEditingNotes(true)
+              }}
+              className={`-ml-2 ${TEXT_BUTTON}`}
+            >
+              {fields.notes ? 'Edit notes' : 'Add a note'}
+            </button>
+          </>
+        )}
+      </div>
     </section>
   )
 }
