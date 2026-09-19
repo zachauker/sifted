@@ -133,6 +133,13 @@ describe('PhotoManager', () => {
     expect(mocks.refresh).not.toHaveBeenCalled()
   })
 
+  it('renders "Add photos" as the last tile inside the Photos grid, not outside it', () => {
+    renderManager()
+    const list = screen.getByRole('list', { name: 'Photos' })
+    const items = within(list).getAllByRole('listitem')
+    expect(within(items[items.length - 1]).getByText('Add photos')).toBeInTheDocument()
+  })
+
   it('accepts only formats the server can read', () => {
     renderManager()
     expect(screen.getByLabelText('Add photos')).toHaveAttribute('accept', 'image/jpeg,image/png,image/webp')

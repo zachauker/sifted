@@ -19,6 +19,30 @@ type UploadFailure = { name: string; message: string }
 const buttonClass =
   'inline-flex min-h-11 items-center justify-center rounded-md border border-line px-3 text-sm font-medium text-ink transition-colors duration-(--dur-fast) ease-(--ease-out-quart) hover:bg-sunken disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent'
 
+// Same job as `buttonClass`, narrower padding and type so "Make cover" and
+// "Delete" fit two-up under a ~112–120px tile. Still min-h-11: a small tile
+// is no excuse for a tap target under 44px.
+const compactButtonClass =
+  'inline-flex min-h-11 items-center justify-center rounded-md border border-line px-2 text-xs font-medium text-ink transition-colors duration-(--dur-fast) ease-(--ease-out-quart) hover:bg-sunken disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent'
+
+const dashedTileClass =
+  'flex flex-col items-center justify-center gap-1 rounded-md border border-dashed border-line text-ink-muted transition-colors duration-(--dur-fast) ease-(--ease-out-quart) hover:border-line-strong hover:bg-sunken hover:text-ink cursor-pointer'
+
+function PlusIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" className="size-5" aria-hidden="true">
+      <path d="M10 4v12M4 10h12" />
+    </svg>
+  )
+}
+
+/** The delete-confirmation copy for a photo's confirm step. */
+function confirmCopy(photo: DetailImage): string {
+  return photo.role === 'source_hero'
+    ? 'Delete the publisher’s photo? Re-importing this recipe won’t bring it back.'
+    : 'Delete this photo?'
+}
+
 /**
  * The Photos section of the edit page: add photos, choose the cover, delete.
  *
@@ -27,6 +51,16 @@ const buttonClass =
  * render — and the cover rule it applies — stays the only source of truth; a
  * rejected text save can never lose an upload, and an upload never needs a
  * Save.
+ *
+ * Photos render as a tight, wrapping grid of small (~112–120px) square
+ * tiles, with a dashed "+ Add photos" tile as the last item in that same
+ * grid. Tiles are kept small because four or five photos at a larger size
+ * pushed the recipe text form below the first screen — a wrapping grid of
+ * small tiles keeps the whole Photos section, and the form beneath it,
+ * visible without scrolling. The cover is marked with a "Cover" pill badged
+ * directly on its thumbnail (plus a ring around the tile) rather than a
+ * plain text label underneath: the cover choice needs to be visible at a
+ * glance, and a word under a ~112px tile was easy to miss.
  *
  * Uploads go one file per request, in sequence, matching the route's
  * one-file contract (see `POST /api/recipes/[id]/images`).
@@ -130,115 +164,147 @@ export function PhotoManager({
     if (files.length > 0) void upload(files)
   }
 
+  const input = (
+    <input
+      id={inputId}
+      type="file"
+      multiple
+      accept="image/jpeg,image/png,image/webp"
+      disabled={busy}
+      onChange={onFilesChosen}
+      className="sr-only"
+    />
+  )
+
+  /** A photo's preview image, or a "No preview" placeholder — sized by `className`. */
+  function Preview({ photo, className }: { photo: DetailImage; className: string }) {
+    const preview = photo.thumbUrl ?? photo.blobUrl
+    if (!preview) {
+      return (
+        <div className={`flex items-center justify-center rounded-md border border-line bg-sunken text-2xs text-ink-muted ${className}`}>
+          No preview
+        </div>
+      )
+    }
+    return (
+      <Image
+        src={preview}
+        alt=""
+        width={photo.width}
+        height={photo.height}
+        // Thumbnails are already 480px WebP — re-optimizing a file that was
+        // already encoded for this purpose would just spend a request per
+        // image for nothing.
+        unoptimized
+        className={`rounded-md border border-line object-cover ${className}`}
+      />
+    )
+  }
+
+  /** "Make cover" / "Delete" (or the confirm step) as a compact row under a tile. */
+  function ActionRow({ photo }: { photo: DetailImage }) {
+    const isCover = photo.id === coverId
+    // Both cover-rule implementations (`pickCover` and the library's SQL
+    // subquery) skip a photo missing either stored URL, so offering "Make
+    // cover" on one would silently change nothing when clicked.
+    const canBeCover = !isCover && isRenderable(photo)
+    if (confirming === photo.id) {
+      return (
+        <div className="flex flex-col gap-1.5">
+          <p className="text-xs text-ink-muted">{confirmCopy(photo)}</p>
+          <div className="flex flex-wrap gap-1.5">
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void remove(photo.id)}
+              className={`${compactButtonClass} border-danger text-danger`}
+            >
+              Delete photo
+            </button>
+            <button type="button" disabled={busy} onClick={() => setConfirming(null)} className={compactButtonClass}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )
+    }
+    return (
+      <div className="flex flex-wrap items-center gap-1.5">
+        {canBeCover && (
+          <button type="button" disabled={busy} onClick={() => void makeCover(photo.id)} className={compactButtonClass}>
+            Make cover
+          </button>
+        )}
+        <button type="button" disabled={busy} onClick={() => setConfirming(photo.id)} className={compactButtonClass}>
+          Delete
+        </button>
+      </div>
+    )
+  }
+
+  if (photos.length === 0) {
+    return (
+      <div>
+        <p className="text-sm text-ink-muted">No photos yet.</p>
+        <div className="mt-4">
+          <label htmlFor={inputId} className={buttonClass}>
+            Add photos
+          </label>
+          {input}
+        </div>
+        <Status progress={progress} failures={failures} actionError={actionError} />
+      </div>
+    )
+  }
+
   return (
     <div>
-      {photos.length === 0 && <p className="text-sm text-ink-muted">No photos yet.</p>}
-
-      {photos.length > 0 && (
-        <ul aria-label="Photos" className="grid grid-cols-2 gap-4 sm:grid-cols-3">
-          {photos.map((photo) => {
-            const isCover = photo.id === coverId
-            const isConfirming = confirming === photo.id
-            const preview = photo.thumbUrl ?? photo.blobUrl
-            // Both cover-rule implementations (`pickCover` and the library's
-            // SQL subquery) skip a photo missing either stored URL, so
-            // offering "Make cover" on one would silently change nothing when
-            // clicked.
-            const canBeCover = isRenderable(photo)
-
-            return (
-              <li key={photo.id} className="flex flex-col gap-2">
-                {preview ? (
-                  <Image
-                    src={preview}
-                    alt=""
-                    width={photo.width}
-                    height={photo.height}
-                    // Thumbnails are already 480px WebP — re-optimizing a
-                    // file that was already encoded for this purpose would
-                    // just spend a request per image for nothing.
-                    unoptimized
-                    className="aspect-square w-full rounded-md border border-line object-cover"
-                  />
-                ) : (
-                  <div className="flex aspect-square w-full items-center justify-center rounded-md border border-line bg-sunken text-xs text-ink-muted">
-                    No preview
-                  </div>
+      <ul aria-label="Photos" className="grid grid-cols-3 gap-3 sm:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+        {photos.map((photo) => {
+          const isCover = photo.id === coverId
+          return (
+            <li key={photo.id} className="flex flex-col gap-1.5">
+              <div className="relative">
+                <Preview
+                  photo={photo}
+                  className={`aspect-square w-full ${isCover ? 'ring-2 ring-accent ring-offset-2 ring-offset-bg' : ''}`}
+                />
+                {isCover && (
+                  <span className="absolute top-1.5 left-1.5 rounded-full bg-accent px-2 py-0.5 text-2xs font-medium text-accent-ink shadow-raised">
+                    Cover
+                  </span>
                 )}
+              </div>
+              <ActionRow photo={photo} />
+            </li>
+          )
+        })}
+        <li>
+          <label htmlFor={inputId} className={`${dashedTileClass} aspect-square w-full`}>
+            <PlusIcon />
+            <span className="text-2xs font-medium">Add photos</span>
+          </label>
+        </li>
+      </ul>
 
-                {isConfirming ? (
-                  <div className="flex flex-col gap-2">
-                    <p className="text-xs text-ink-muted">
-                      {photo.role === 'source_hero'
-                        ? 'Delete the publisher’s photo? Re-importing this recipe won’t bring it back.'
-                        : 'Delete this photo?'}
-                    </p>
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => void remove(photo.id)}
-                        className={`${buttonClass} border-danger text-danger`}
-                      >
-                        Delete photo
-                      </button>
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => setConfirming(null)}
-                        className={buttonClass}
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="flex flex-wrap items-center gap-2">
-                    {isCover ? (
-                      <span className="text-xs font-medium text-ink-muted">Cover</span>
-                    ) : (
-                      canBeCover && (
-                        <button
-                          type="button"
-                          disabled={busy}
-                          onClick={() => void makeCover(photo.id)}
-                          className={buttonClass}
-                        >
-                          Make cover
-                        </button>
-                      )
-                    )}
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => setConfirming(photo.id)}
-                      className={buttonClass}
-                    >
-                      Delete
-                    </button>
-                  </div>
-                )}
-              </li>
-            )
-          })}
-        </ul>
-      )}
+      {input}
 
-      <div className="mt-4">
-        <label htmlFor={inputId} className={buttonClass}>
-          Add photos
-        </label>
-        <input
-          id={inputId}
-          type="file"
-          multiple
-          accept="image/jpeg,image/png,image/webp"
-          disabled={busy}
-          onChange={onFilesChosen}
-          className="sr-only"
-        />
-      </div>
+      <Status progress={progress} failures={failures} actionError={actionError} />
+    </div>
+  )
+}
 
+function Status({
+  progress,
+  failures,
+  actionError,
+}: {
+  progress: string
+  failures: UploadFailure[]
+  actionError: string
+}) {
+  return (
+    <>
       <p role="status" className="mt-2 text-sm text-ink-muted">
         {progress}
       </p>
@@ -255,6 +321,6 @@ export function PhotoManager({
           {actionError && <p>{actionError}</p>}
         </div>
       )}
-    </div>
+    </>
   )
 }
