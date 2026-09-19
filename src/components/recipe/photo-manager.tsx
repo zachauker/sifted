@@ -44,6 +44,100 @@ function confirmCopy(photo: DetailImage): string {
 }
 
 /**
+ * A photo's preview image, or a "No preview" placeholder — sized by
+ * `className`. Module-scope (like `Status`) rather than a closure inside
+ * `PhotoManager`, so each tile keeps a stable component identity across
+ * renders — a function defined inside the render body gets a new identity
+ * every render, which makes React unmount and remount every tile instead of
+ * reconciling it by props whenever unrelated state (`busy`, `progress`, …)
+ * changes.
+ */
+function Preview({ photo, className }: { photo: DetailImage; className: string }) {
+  const preview = photo.thumbUrl ?? photo.blobUrl
+  if (!preview) {
+    return (
+      <div className={`flex items-center justify-center rounded-md border border-line bg-sunken text-xs text-ink-muted ${className}`}>
+        No preview
+      </div>
+    )
+  }
+  return (
+    <Image
+      src={preview}
+      alt=""
+      width={photo.width}
+      height={photo.height}
+      // Thumbnails are already 480px WebP — re-optimizing a file that was
+      // already encoded for this purpose would just spend a request per
+      // image for nothing.
+      unoptimized
+      className={`rounded-md border border-line object-cover ${className}`}
+    />
+  )
+}
+
+/**
+ * "Make cover" / "Delete" (or the confirm step) as a compact row under a
+ * tile. Module-scope for the same reconciliation reason as `Preview` — see
+ * its comment.
+ */
+function ActionRow({
+  photo,
+  coverId,
+  busy,
+  confirming,
+  setConfirming,
+  makeCover,
+  remove,
+}: {
+  photo: DetailImage
+  coverId: string | null
+  busy: boolean
+  confirming: string | null
+  setConfirming: (id: string | null) => void
+  makeCover: (id: string) => Promise<void>
+  remove: (id: string) => Promise<void>
+}) {
+  const isCover = photo.id === coverId
+  // Both cover-rule implementations (`pickCover` and the library's SQL
+  // subquery) skip a photo missing either stored URL, so offering "Make
+  // cover" on one would silently change nothing when clicked.
+  const canBeCover = !isCover && isRenderable(photo)
+  if (confirming === photo.id) {
+    return (
+      <div className="flex flex-col gap-1.5">
+        <p className="text-xs text-ink-muted">{confirmCopy(photo)}</p>
+        <div className="flex flex-wrap gap-1.5">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void remove(photo.id)}
+            className={`${compactButtonClass} border-danger text-danger`}
+          >
+            Delete photo
+          </button>
+          <button type="button" disabled={busy} onClick={() => setConfirming(null)} className={compactButtonClass}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    )
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {canBeCover && (
+        <button type="button" disabled={busy} onClick={() => void makeCover(photo.id)} className={compactButtonClass}>
+          Make cover
+        </button>
+      )}
+      <button type="button" disabled={busy} onClick={() => setConfirming(photo.id)} className={compactButtonClass}>
+        Delete
+      </button>
+    </div>
+  )
+}
+
+/**
  * The Photos section of the edit page: add photos, choose the cover, delete.
  *
  * Deliberately outside the recipe text form. Every change here takes effect
@@ -176,72 +270,6 @@ export function PhotoManager({
     />
   )
 
-  /** A photo's preview image, or a "No preview" placeholder — sized by `className`. */
-  function Preview({ photo, className }: { photo: DetailImage; className: string }) {
-    const preview = photo.thumbUrl ?? photo.blobUrl
-    if (!preview) {
-      return (
-        <div className={`flex items-center justify-center rounded-md border border-line bg-sunken text-2xs text-ink-muted ${className}`}>
-          No preview
-        </div>
-      )
-    }
-    return (
-      <Image
-        src={preview}
-        alt=""
-        width={photo.width}
-        height={photo.height}
-        // Thumbnails are already 480px WebP — re-optimizing a file that was
-        // already encoded for this purpose would just spend a request per
-        // image for nothing.
-        unoptimized
-        className={`rounded-md border border-line object-cover ${className}`}
-      />
-    )
-  }
-
-  /** "Make cover" / "Delete" (or the confirm step) as a compact row under a tile. */
-  function ActionRow({ photo }: { photo: DetailImage }) {
-    const isCover = photo.id === coverId
-    // Both cover-rule implementations (`pickCover` and the library's SQL
-    // subquery) skip a photo missing either stored URL, so offering "Make
-    // cover" on one would silently change nothing when clicked.
-    const canBeCover = !isCover && isRenderable(photo)
-    if (confirming === photo.id) {
-      return (
-        <div className="flex flex-col gap-1.5">
-          <p className="text-xs text-ink-muted">{confirmCopy(photo)}</p>
-          <div className="flex flex-wrap gap-1.5">
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => void remove(photo.id)}
-              className={`${compactButtonClass} border-danger text-danger`}
-            >
-              Delete photo
-            </button>
-            <button type="button" disabled={busy} onClick={() => setConfirming(null)} className={compactButtonClass}>
-              Cancel
-            </button>
-          </div>
-        </div>
-      )
-    }
-    return (
-      <div className="flex flex-wrap items-center gap-1.5">
-        {canBeCover && (
-          <button type="button" disabled={busy} onClick={() => void makeCover(photo.id)} className={compactButtonClass}>
-            Make cover
-          </button>
-        )}
-        <button type="button" disabled={busy} onClick={() => setConfirming(photo.id)} className={compactButtonClass}>
-          Delete
-        </button>
-      </div>
-    )
-  }
-
   if (photos.length === 0) {
     return (
       <div>
@@ -275,7 +303,15 @@ export function PhotoManager({
                   </span>
                 )}
               </div>
-              <ActionRow photo={photo} />
+              <ActionRow
+                photo={photo}
+                coverId={coverId}
+                busy={busy}
+                confirming={confirming}
+                setConfirming={setConfirming}
+                makeCover={makeCover}
+                remove={remove}
+              />
             </li>
           )
         })}
