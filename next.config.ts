@@ -28,9 +28,37 @@ const nextConfig: NextConfig = {
   },
 }
 
+/**
+ * Sentry associates a release with its commits by shelling out to git in the
+ * build directory (`setCommits: { auto: true }`, the default). A Vercel builder
+ * has no `.git`, so that step is skipped silently — no error, no warning, just
+ * a release with no commits and therefore no suspect commits on any issue.
+ *
+ * Vercel does expose the SHA as an environment variable, so pass it explicitly
+ * instead of hoping detection works. `repo` has to match the repository as it
+ * is named in Sentry (Settings > Repositories), not the git remote URL.
+ *
+ * Undefined off Vercel (a local `next build`), where there is no deploy to
+ * associate anything with.
+ */
+const commit = process.env.VERCEL_GIT_COMMIT_SHA
+
 export default withSentryConfig(nextConfig, {
   org: 'willowbrook',
   project: 'sifted',
+
+  release: commit
+    ? {
+        setCommits: {
+          repo: 'zachauker/sifted',
+          commit,
+          // A build must not fail because commit association didn't work out.
+          // Shipping beats perfect release metadata.
+          ignoreMissing: true,
+          ignoreEmpty: true,
+        },
+      }
+    : undefined,
 
   // Build-time secret, and a different thing from the DSN: it authorizes
   // uploading source maps. Absent (local builds), the build still succeeds and
