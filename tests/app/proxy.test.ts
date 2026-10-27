@@ -61,6 +61,12 @@ describe('middleware matcher (the actual `config.matcher` the middleware runs, n
     // whether anyone can use the app.
     ['/api/health', false],
     ['/api/auth/callback/credentials', false],
+    // The Sentry tunnel route (`tunnelRoute` in next.config.ts). The browser
+    // posts error events and replays here instead of to sentry.io so an ad
+    // blocker can't drop them, and it does so with no session — from /login,
+    // and from pages that have already crashed. A 401 here would turn
+    // client-side error reporting off without anything to show why.
+    ['/monitoring', false],
     ['/_next/static/chunks/main.js', false],
     ['/_next/image', false],
     ['/favicon.ico', false],

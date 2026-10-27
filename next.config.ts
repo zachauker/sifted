@@ -1,4 +1,6 @@
 import type { NextConfig } from 'next'
+// v11 moved this out of the package root into its own entry point.
+import { withSentryConfig } from '@sentry/nextjs/config'
 
 const nextConfig: NextConfig = {
   images: {
@@ -26,4 +28,26 @@ const nextConfig: NextConfig = {
   },
 }
 
-export default nextConfig
+export default withSentryConfig(nextConfig, {
+  org: 'willowbrook',
+  project: 'sifted',
+
+  // Build-time secret, and a different thing from the DSN: it authorizes
+  // uploading source maps. Absent (local builds), the build still succeeds and
+  // simply skips the upload.
+  authToken: process.env.SENTRY_AUTH_TOKEN,
+
+  // Without this, frames from Next's own code and from dependencies stay
+  // minified, which is exactly where a hydration or router error lands.
+  widenClientFileUpload: true,
+
+  // Ad blockers block requests to `*.sentry.io` outright, and a browser that
+  // does so reports nothing at all — silently. Routing events through our own
+  // origin instead is the only way client errors and replays survive that.
+  // The path is fixed rather than `true` (which randomizes it per build)
+  // because `proxy.ts`'s matcher has to name it, and matchers are static.
+  tunnelRoute: '/monitoring',
+
+  // Quiet locally, verbose in CI where the output is the only record.
+  silent: !process.env.CI,
+})
