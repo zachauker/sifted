@@ -47,6 +47,17 @@ export default auth(decide)
  * assets are excluded too, so a phone loading the app shell doesn't pay for
  * a session check (and a JWT decode) per JS chunk and optimized image.
  *
+ * Also excluded: `/monitoring`, the Sentry tunnel route that
+ * `withSentryConfig`'s `tunnelRoute` option creates in `next.config.ts`. The
+ * browser POSTs error events and session replays to it so that an ad blocker
+ * cannot drop them, and those requests carry no session — the whole point is
+ * that they also fire from `/login`, before anyone has signed in, and from a
+ * page that just crashed. Left to `decide`, every one of them would come back
+ * 401 and the client half of Sentry would report nothing, silently, which is
+ * the one failure mode monitoring must not have. Nothing is exposed by this:
+ * the DSN is public by design, so the route grants no access it did not
+ * already have.
+ *
  * Also excluded: the PWA manifest and its icons (`public/manifest.json`,
  * `public/icon.svg`, `public/icon-192.png`, `public/icon-512.png`,
  * `public/apple-touch-icon.png` — see `src/app/layout.tsx`'s `manifest` and
@@ -61,6 +72,6 @@ export default auth(decide)
  */
 export const config = {
   matcher: [
-    '/((?!api/auth|api/import|api/health|_next/static|_next/image|favicon.ico|manifest.json|icon.svg|icon-192.png|icon-512.png|apple-touch-icon.png).*)',
+    '/((?!api/auth|api/import|api/health|monitoring|_next/static|_next/image|favicon.ico|manifest.json|icon.svg|icon-192.png|icon-512.png|apple-touch-icon.png).*)',
   ],
 }
