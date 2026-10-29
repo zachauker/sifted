@@ -7,8 +7,10 @@ import * as Sentry from '@sentry/nextjs'
  * captured from the first deploy instead of vanishing until someone notices
  * the gap.
  *
- * The edge runtime has no `includeLocalVariables` (that needs the Node
- * debugger), hence the shorter config than `sentry.server.config.ts`.
+ * The options below are now identical to `sentry.server.config.ts`. The two
+ * files stay separate because Next loads them for different runtimes, not
+ * because they differ — see `instrumentation.ts`, which picks between them on
+ * `NEXT_RUNTIME`.
  */
 Sentry.init({
   dsn:
