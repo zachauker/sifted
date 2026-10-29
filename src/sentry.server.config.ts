@@ -23,15 +23,18 @@ Sentry.init({
   // Two users; see the note in `instrumentation-client.ts`.
   tracesSampleRate: 1,
 
-  // Attaches the value of each local variable to its stack frame, which is
-  // the difference between "something threw in extract" and seeing the actual
-  // URL that broke it.
+  // `includeLocalVariables` is deliberately absent, and this note is here so
+  // nobody turns it back on without meeting the reason it is off.
   //
-  // NOTE: this is why it is worth knowing about — locals include whatever was
-  // in scope, so a throw inside `src/lib/api-auth.ts` or an LLM call could put
-  // a bearer token or an API key into the event. Those events only go to our
-  // own Sentry project, and `sendDefaultPii` stays off (no `dataCollection`
-  // object is passed below, so request bodies, cookies and user info are not
-  // collected), but set this to `false` if that trade stops being worth it.
-  includeLocalVariables: true,
+  // It attaches the value of every local variable to its stack frame, which is
+  // genuinely useful — the difference between "something threw in extract" and
+  // seeing the URL that broke it. But locals are whatever was in scope, so a
+  // throw inside `src/lib/api-auth.ts` or an LLM call would carry a bearer
+  // token or an API key into the event. Not worth it for the debugging help.
+  //
+  // Off across all of these projects, for consistency rather than per-repo
+  // judgement. `false` is already the SDK default, so the option is omitted
+  // rather than set explicitly. `sendDefaultPii` also stays off: no
+  // `dataCollection` object is passed, so request bodies, cookies and user
+  // info are not collected either.
 })
